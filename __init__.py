@@ -22,7 +22,11 @@ class RoteadorCNC(pcbnew.ActionPlugin):
         self.description = ("Posiciona e roteia para fresagem caseira: trilha a 45 graus, "
                             "via antes do pad e nada de solda por cima.")
         self.show_toolbar_button = True
-        self.icon_file_name = os.path.join(os.path.dirname(__file__), "icone.png")
+        # So aponta o icone se ele existir de verdade: caminho quebrado aqui vira
+        # erro na barra de ferramentas do KiCad, e o plugin some sem explicar.
+        icone = os.path.join(os.path.dirname(__file__), "icone.png")
+        if os.path.exists(icone):
+            self.icon_file_name = icone
 
     def Run(self):
         try:
