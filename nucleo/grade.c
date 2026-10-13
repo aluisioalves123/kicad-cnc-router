@@ -86,7 +86,7 @@ static void retangulo(PbMapa *m, double x, double y, double larg, double alt,
     double meia = sqrt(larg * larg + alt * alt) / 2.0;
     int c0 = pb_coluna_de(m, x - meia), c1 = pb_coluna_de(m, x + meia);
     int l0 = pb_linha_de(m, y - meia), l1 = pb_linha_de(m, y + meia);
-    double t = -giro * M_PI / 180.0;
+    double t = giro * M_PI / 180.0;      /* mundo -> local: +giro (KiCad, Y para baixo) */
     double ct = cos(t), st = sin(t), hx = larg / 2.0, hy = alt / 2.0;
     int c, l;
     for (l = l0; l <= l1; l++) {
@@ -105,7 +105,7 @@ static void retangulo(PbMapa *m, double x, double y, double larg, double alt,
 static void capsula(PbMapa *m, double x, double y, double larg, double alt,
                     double giro, int face, int rede)
 {
-    double t = giro * M_PI / 180.0;
+    double t = -giro * M_PI / 180.0;     /* eixo da capsula no mundo: Rot(-giro) */
     double raio, meio, dx, dy;
     if (larg >= alt) {
         raio = alt / 2.0;

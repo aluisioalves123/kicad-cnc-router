@@ -56,8 +56,10 @@ def monta_mapa(placa, regras, custos: Custos = None):
         for i, (x, y) in enumerate(placa.contorno):
             pts[i * 2], pts[i * 2 + 1] = x, y
         m.guarda(pts)
+        # a borda pede a folga dela, que pode ser maior que a folga entre redes
         formas.append(nativo.PbForma(forma=nativo.FORA_DE, rede=nativo.DE_NINGUEM,
                                      faces=nativo.AMBAS,
+                                     folga_extra=max(0.0, regras.borda - regras.folga),
                                      n_pontos=len(placa.contorno), pontos=pts))
 
     for z in placa.proibidas:
@@ -117,6 +119,7 @@ def posiciona(placa, regras, candidatos=24, passos=3000, semente=1, custos=None)
     indice = {p.ref: i for i, p in enumerate(placa.pecas)}
     pecas = (nativo.PbPeca * len(placa.pecas))(*[
         nativo.PbPeca(x=p.x, y=p.y, giro=p.giro, larg=p.largura, alt=p.altura,
+                      cx=p.cx, cy=p.cy,
                       movel=int(not p.travada and p.ref in com_rede))
         for p in placa.pecas])
     pads = (nativo.PbPadC * len(placa.pads))(*[
@@ -161,7 +164,7 @@ def posiciona(placa, regras, candidatos=24, passos=3000, semente=1, custos=None)
     por_ref = {p.ref: p for p in placa.pecas}
     for pad in placa.pads:
         p = por_ref[pad.dono]
-        a = math.radians(p.giro)
+        a = math.radians(-p.giro)    # local -> mundo: -giro (convencao em placa.py)
         pad.x = p.x + pad.dx * math.cos(a) - pad.dy * math.sin(a)
         pad.y = p.y + pad.dx * math.sin(a) + pad.dy * math.cos(a)
         pad.giro = p.giro + pad.giro_local

@@ -13,6 +13,14 @@ from dataclasses import dataclass, field
 import pcbnew
 
 
+# CONVENCAO DE GIRO DO KICAD: o eixo Y aponta para baixo, entao giro positivo na
+# tela e NEGATIVO na matematica. mundo = Rot(-giro) . local, e local = Rot(+giro) .
+# mundo. Errei este sinal na ida e na volta, e o teste de "reconstrucao exata" nao
+# viu porque so testava o angulo que a peca ja tinha - ida e volta com a mesma
+# formula errada sempre fecha. Apareceu quando o posicionador escolheu angulo novo
+# e as pecas foram parar empilhadas.
+
+
 def mm(valor) -> float:
     return pcbnew.ToMM(valor)
 
@@ -50,7 +58,7 @@ class Pad:
         """
         a = self.largura / 2.0
         b = self.altura / 2.0
-        t = ang - math.radians(self.giro)
+        t = ang + math.radians(self.giro)       # mundo -> local: +giro
         ct, st = math.cos(t), math.sin(t)
         if self.forma == "circulo":
             return a
@@ -86,8 +94,18 @@ class Peca:
     y: float
     giro: float
     travada: bool            # cadeado do proprio KiCad, nao lista nossa
-    largura: float           # caixa do footprint, em mm
+    # Caixa do corpo no referencial DA PECA (giro zero), e o centro dela em
+    # relacao a origem. As duas coisas foram erro:
+    # - o corpo NAO fica centrado na origem do footprint: num resistor ele esta
+    #   3,81 mm deslocado, num TO-92 2,57 mm. Tratar como centrado fez o
+    #   posicionador jogar Q2 para fora da placa e empilhar pecas, achando que
+    #   estava tudo certo;
+    # - a caixa que o KiCad devolve ja vem GIRADA; guardar assim e girar de novo
+    #   no posicionador trocava largura e altura duas vezes na peca a 90 graus.
+    largura: float
     altura: float
+    cx: float = 0.0
+    cy: float = 0.0
     pads: list = field(default_factory=list)
 
 
@@ -115,6 +133,7 @@ class Placa:
     trilhas: list = field(default_factory=list)
     vias: list = field(default_factory=list)
     abertas: int = 0
+    borda: float = 0.5         # folga cobre-borda do Board Setup
 
     def pads_da_rede(self, rede: int):
         return [p for p in self.pads if p.rede == rede]
@@ -125,6 +144,25 @@ FORMAS = {
     pcbnew.PAD_SHAPE_OVAL: "oval",
     pcbnew.PAD_SHAPE_RECT: "retangulo",
 }
+
+
+def _caixa_do_courtyard(fp):
+    """Caixa do COURTYARD da peca - a regra do KiCad para "aqui nao cabe outra".
+
+    A caixa do footprint (GetBoundingBox) inclui o desenho de fabricacao e e maior
+    que o courtyard. Usando ela, a placa feita a mao parecia ter 1,6 mm2 de
+    sobreposicao, e eu tolerei 1 mm2 por par para nao reprovar o usuario - o que
+    deixou passar um courtyard cruzado que o DRC do KiCad pegou. O DRC mostra zero
+    courtyard sobreposto na placa feita a mao: essa e a regua, com tolerancia zero.
+
+    Courtyard redondo (eletrolitico) vira a caixa dele: mais severo que o circulo,
+    nunca mais frouxo.
+    """
+    for camada in (pcbnew.F_CrtYd, pcbnew.B_CrtYd):
+        poly = fp.GetCourtyard(camada)
+        if poly.OutlineCount():
+            return poly.BBox()
+    return fp.GetBoundingBox(False, False)
 
 
 def _poligono_do_contorno(board) -> list:
@@ -158,16 +196,25 @@ def ler(board) -> Placa:
 
     for fp in board.GetFootprints():
         ref = fp.GetReference()
-        caixa_fp = fp.GetBoundingBox(False, False)
+        caixa_fp = _caixa_do_courtyard(fp)
+        ox, oy = mm(fp.GetPosition().x), mm(fp.GetPosition().y)
+        giro = fp.GetOrientationDegrees()
+        # da caixa do mundo para o referencial da peca
+        a = math.radians(giro)                   # mundo -> local: +giro
+        wx = mm(caixa_fp.GetCenter().x) - ox
+        wy = mm(caixa_fp.GetCenter().y) - oy
+        larg, alt = mm(caixa_fp.GetWidth()), mm(caixa_fp.GetHeight())
+        if int(round(giro)) % 180 in (90, -90):
+            larg, alt = alt, larg
         peca = Peca(
-            ref=ref,
-            x=mm(fp.GetPosition().x), y=mm(fp.GetPosition().y),
-            giro=fp.GetOrientationDegrees(),
+            ref=ref, x=ox, y=oy, giro=giro,
             # Travar peca NAO e lista nossa: e o cadeado que o KiCad ja tem. Quem
             # monta trava na interface que ja conhece, e nada precisa ser mantido
             # em sincronia com o nosso arquivo.
             travada=bool(fp.IsLocked()),
-            largura=mm(caixa_fp.GetWidth()), altura=mm(caixa_fp.GetHeight()),
+            largura=larg, altura=alt,
+            cx=wx * math.cos(a) - wy * math.sin(a),
+            cy=wx * math.sin(a) + wy * math.cos(a),
         )
         p.pecas.append(peca)
         for pad in fp.Pads():
@@ -175,7 +222,7 @@ def ler(board) -> Placa:
             tam = pad.GetSize()
             # offset local: desfaz o giro da peca para guardar o pad no
             # referencial dela
-            ang = math.radians(-fp.GetOrientationDegrees())
+            ang = math.radians(fp.GetOrientationDegrees())   # mundo -> local
             ox = mm(pad.GetPosition().x) - peca.x
             oy = mm(pad.GetPosition().y) - peca.y
             lx = ox * math.cos(ang) - oy * math.sin(ang)
@@ -227,4 +274,5 @@ def ler(board) -> Placa:
                               t.GetNetCode()))
 
     p.abertas = board.GetConnectivity().GetUnconnectedCount(False)
+    p.borda = mm(board.GetDesignSettings().m_CopperEdgeClearance)
     return p

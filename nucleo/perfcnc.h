@@ -28,7 +28,8 @@
  * "15 pinos soltos" em toda configuracao. Demorei a desconfiar justamente porque
  * parecia certo. Binario incompativel tem de falhar na cara, nao mentir baixinho.
  */
-#define PB_ABI 2   /* 2: posicionador (PbPeca, PbPadC, PbProibida, PbPlacar) */
+#define PB_ABI 4   /* 4: PbRegras ganha a folga cobre-borda */
+/* (o corpo agora e o courtyard - mesma struct, mesma ABI) */
 
 /* ------------------------------------------------------------------ formas */
 #define PB_CIRCULO    0
@@ -57,6 +58,7 @@ typedef struct {
     double custo_curva;  /* por mudanca de direcao, em unidades de celula */
     double custo_via;
     double peso_cima;    /* andar pela face de cima custa isto vezes mais */
+    double borda;        /* folga cobre-borda da placa, mm (Board Setup) */
 
     int salto_via;       /* a via so e tentada de N em N celulas */
     long orcamento;      /* teto de nos por busca; 0 = sem teto */
@@ -87,8 +89,9 @@ typedef struct { int rede, c, l; } PbAberta;
  * para mecanica (furo de fixacao: sem rede, nao entra em roteamento, e mudar o
  * lugar dele muda onde a placa parafusa). */
 typedef struct {
-    double x, y, giro;
-    double larg, alt;
+    double x, y, giro;   /* origem do footprint no mundo */
+    double larg, alt;    /* corpo no referencial DA PECA (giro zero) */
+    double cx, cy;       /* centro do corpo em relacao a origem, ref. da peca */
     int movel;
 } PbPeca;
 
@@ -116,6 +119,7 @@ typedef struct {
     int vias;
     double fio;          /* mm */
     int vencedor;        /* 0 = a posicao de entrada continuou sendo a melhor */
+    int descartados;     /* candidatos ilegais: peca empilhada, fora da placa... */
 } PbPlacar;
 
 #ifdef __cplusplus

@@ -11,7 +11,7 @@ from __future__ import annotations
 import ctypes
 import os
 
-ABI_ESPERADA = 2
+ABI_ESPERADA = 4
 
 CIRCULO, CAPSULA, RETANGULO, POLIGONO, FORA_DE, SEGMENTO = 0, 1, 2, 3, 4, 5
 CIMA, BAIXO, AMBAS = 1, 2, 3
@@ -25,6 +25,7 @@ class PbRegras(ctypes.Structure):
         ("broca", ctypes.c_double),
         ("custo_curva", ctypes.c_double), ("custo_via", ctypes.c_double),
         ("peso_cima", ctypes.c_double),
+        ("borda", ctypes.c_double),
         ("salto_via", ctypes.c_int), ("orcamento", ctypes.c_long),
     ]
 
@@ -60,7 +61,8 @@ class PbAberta(ctypes.Structure):
 class PbPeca(ctypes.Structure):
     _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double),
                 ("giro", ctypes.c_double), ("larg", ctypes.c_double),
-                ("alt", ctypes.c_double), ("movel", ctypes.c_int)]
+                ("alt", ctypes.c_double), ("cx", ctypes.c_double),
+                ("cy", ctypes.c_double), ("movel", ctypes.c_int)]
 
 
 class PbPadC(ctypes.Structure):
@@ -79,7 +81,7 @@ class PbProibida(ctypes.Structure):
 class PbPlacar(ctypes.Structure):
     _fields_ = [("abertas_antes", ctypes.c_int), ("abertas_depois", ctypes.c_int),
                 ("vias", ctypes.c_int), ("fio", ctypes.c_double),
-                ("vencedor", ctypes.c_int)]
+                ("vencedor", ctypes.c_int), ("descartados", ctypes.c_int)]
 
 
 class NucleoAusente(RuntimeError):
@@ -166,6 +168,7 @@ def regras_para_c(regras, custos=None, salto_via=5, orcamento=3000000) -> PbRegr
         custo_curva=getattr(c, "curva", 6.0),
         custo_via=getattr(c, "via", 40.0),
         peso_cima=getattr(c, "face_de_cima", 1.15),
+        borda=regras.borda,
         salto_via=salto_via, orcamento=orcamento,
     )
 

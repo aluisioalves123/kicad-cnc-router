@@ -30,6 +30,7 @@ def principal(caminho: str) -> int:
     board = pcbnew.LoadBoard(caminho)
 
     p = leitor.ler(board)
+    regras.borda = p.borda          # a folga de borda e do projeto, nao nossa
     antes = len(p.trilhas), len(p.vias)
     # roteia do zero: o que estava la e descartado do modelo
     p.trilhas, p.vias = [], []
@@ -75,7 +76,20 @@ def principal(caminho: str) -> int:
     print("  moveu %d peca(s); tirou %d trilha(s)/via(s) antigas, criou %d trilhas e %d vias"
           % (movidas, tirou, criou["trilhas"], criou["vias"]))
     print("  %s" % saida)
-    return 1 if problemas else 0
+
+    from cnc_router import drc
+    print()
+    print("DRC DO KICAD (so o que a placa gerada tem de NOVO)")
+    lista, sem_ligacao = drc.novas(caminho, saida)
+    if lista is None:
+        print("  kicad-cli nao encontrado: DRC nao rodou")
+    else:
+        print("  sem ligacao: original %d, gerada %d" % sem_ligacao)
+        for tipo, itens in lista:
+            print("  ! %s: %s" % (tipo, itens))
+        if not lista:
+            print("  nenhuma violacao nova")
+    return 1 if (problemas or lista) else 0
 
 
 if __name__ == "__main__":

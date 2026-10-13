@@ -20,10 +20,18 @@
 #include "perfcnc.h"
 #include "interno.h"
 
+/* CONVENCAO DE GIRO DO KICAD: Y aponta para baixo, entao giro positivo na tela e
+ * NEGATIVO na matematica. mundo = Rot(-giro) . local; local = Rot(+giro) . mundo.
+ * Errei o sinal na ida e na volta; o teste de ida-e-volta nao tinha como ver. */
 #define W_SOBREPOE  500.0
 #define W_FORA      800.0
 #define W_PROIBIDA  800.0
 #define W_ESPALHA   0.9
+#define W_PAD       2000.0    /* por mm de folga faltando entre pads de pecas diferentes */
+/* Zero. O corpo agora e o COURTYARD, e o DRC do KiCad mostra zero courtyard
+ * sobreposto na placa feita a mao. A tolerancia de 1 mm2 que existia aqui era
+ * compensacao por medir com a caixa errada, e deixou passar R3 cruzando D1. */
+#define TOLERA_SOBREPOSICAO 1e-6
 #define REGIOES     3
 #define GRADE_POS   0.25      /* mm: posicao com 7 casas decimais nao ajuda ninguem */
 
@@ -44,34 +52,26 @@ static double sorteio(unsigned long long *s)
 
 /* ------------------------------------------------------------------ geometria */
 
-static int dentro_poli(double x, double y, const double *p, int n)
-{
-    int dentro = 0, i;
-    for (i = 0; i < n; i++) {
-        double x1 = p[i * 2], y1 = p[i * 2 + 1];
-        double x2 = p[((i + 1) % n) * 2], y2 = p[((i + 1) % n) * 2 + 1];
-        if ((y1 > y) != (y2 > y)) {
-            double corte = x1 + (y - y1) * (x2 - x1) / (y2 - y1);
-            if (x < corte) dentro = !dentro;
-        }
-    }
-    return dentro;
-}
-
+/* O corpo NAO fica centrado na origem do footprint: num resistor ele esta 3,81 mm
+ * deslocado, num TO-92 2,57 mm. Tratar como centrado jogou Q2 para fora da placa e
+ * empilhou pecas enquanto o custo jurava que estava tudo certo. */
 static void caixa(const PbPeca *p, double *x0, double *y0, double *x1, double *y1)
 {
     double larg = p->larg, alt = p->alt;
+    double a = -p->giro * M_PI / 180.0;          /* local -> mundo */
+    double mx = p->x + p->cx * cos(a) - p->cy * sin(a);
+    double my = p->y + p->cx * sin(a) + p->cy * cos(a);
     int g = ((int)floor(p->giro + 0.5)) % 180;
     if (g < 0) g += 180;
     if (g == 90) { double t = larg; larg = alt; alt = t; }
-    *x0 = p->x - larg / 2.0; *y0 = p->y - alt / 2.0;
-    *x1 = p->x + larg / 2.0; *y1 = p->y + alt / 2.0;
+    *x0 = mx - larg / 2.0; *y0 = my - alt / 2.0;
+    *x1 = mx + larg / 2.0; *y1 = my + alt / 2.0;
 }
 
 static void pos_do_pad(const PbPeca *pecas, const PbPadC *pad, double *x, double *y)
 {
     const PbPeca *p = &pecas[pad->peca];
-    double a = p->giro * M_PI / 180.0, ca = cos(a), sa = sin(a);
+    double a = -p->giro * M_PI / 180.0, ca = cos(a), sa = sin(a);   /* local -> mundo */
     *x = p->x + pad->dx * ca - pad->dy * sa;
     *y = p->y + pad->dx * sa + pad->dy * ca;
 }
@@ -90,6 +90,56 @@ typedef struct {
     int *redes;                          /* redes distintas */
     int n_redes;
 } Ctx;
+
+/* Quanto o pad avanca na direcao `ang` (radianos, mundo). A pergunta nunca e "qual
+ * o tamanho do pad", e sim quanto ele avanca NA DIRECAO do vizinho: num oval de
+ * 1,8 x 3 virado para o pino ao lado, usar o eixo maior erra o vao em mais de 1 mm. */
+static double raio_na_direcao(const PbPadC *pad, double giro_peca, double ang)
+{
+    double a = pad->larg / 2.0, b = pad->alt / 2.0;
+    double t = ang + (giro_peca + pad->giro_local) * M_PI / 180.0;   /* mundo -> local */
+    double ct = fabs(cos(t)), st = fabs(sin(t));
+    if (pad->forma == PB_CIRCULO) return a;
+    if (pad->forma == PB_CAPSULA) {
+        double r = (a < b) ? a : b, meio = fabs(a - b);
+        /* capsula: meio-comprimento reto mais a ponta redonda */
+        if (a >= b) return ct * meio + r;
+        return st * meio + r;
+    }
+    {
+        double rx = ct > 1e-12 ? a / ct : 1e30, ry = st > 1e-12 ? b / st : 1e30;
+        return rx < ry ? rx : ry;
+    }
+}
+
+/* Folga faltando entre pads de PECAS DIFERENTES, somada em mm. E a regra eletrica
+ * que importa - foi o que se viu na tela: pad de uma peca encostado no de outra. */
+static double pads_colados(const Ctx *c)
+{
+    double total = 0.0;
+    int i, k;
+    for (i = 0; i < c->n_pads; i++) {
+        const PbPadC *pa = &c->pads[i];
+        double xa, ya;
+        pos_do_pad(c->pecas, pa, &xa, &ya);
+        for (k = i + 1; k < c->n_pads; k++) {
+            const PbPadC *pb = &c->pads[k];
+            double xb, yb, d, ang, falta;
+            if (pa->peca == pb->peca) continue;
+            if (!c->pecas[pa->peca].movel && !c->pecas[pb->peca].movel) continue;
+            pos_do_pad(c->pecas, pb, &xb, &yb);
+            d = hypot(xb - xa, yb - ya);
+            ang = atan2(yb - ya, xb - xa);
+            falta = raio_na_direcao(pa, c->pecas[pa->peca].giro, ang)
+                  + raio_na_direcao(pb, c->pecas[pb->peca].giro, ang + M_PI)
+                  + c->r->folga - d;
+            /* mesma rede pode encostar o cobre, mas aqui sao pecas diferentes: o
+               corpo de uma nao cabe em cima do pad da outra */
+            if (falta > 0) total += falta;
+        }
+    }
+    return total;
+}
 
 static double comprimento(const Ctx *c)
 {
@@ -155,7 +205,8 @@ static double sobreposicao(const Ctx *c)
             caixa(&c->pecas[k], &c0, &d0, &c1, &d1);
             dx = (a1 < c1 ? a1 : c1) - (a0 > c0 ? a0 : c0);
             dy = (b1 < d1 ? b1 : d1) - (b0 > d0 ? b0 : d0);
-            if (dx > 0 && dy > 0) total += dx * dy;
+            if (dx > 0 && dy > 0 && dx * dy > TOLERA_SOBREPOSICAO)
+                total += dx * dy;
         }
     }
     return total;
@@ -179,28 +230,88 @@ static double fora(const Ctx *c)
     return total;
 }
 
-/* Medido no POLIGONO, nao na caixa dele: nas areas triangulares de canto, a caixa
- * dobrava a conta, e o fantasma era grande o bastante para o otimizador jogar
- * peca para fora da placa. E so area que proibe FOOTPRINT - o KiCad tem essa
- * proibicao separada da de trilha. */
+/* Area EXATA do poligono dentro do retangulo: recorta o poligono pelos quatro
+ * lados (Sutherland-Hodgman) e mede o que sobrou.
+ *
+ * Substitui uma amostragem de 0,5 em 0,5 mm, que deixava passar ponta de
+ * triangulo menor que o passo - foi assim que J1 entrou numa area proibida e so o
+ * DRC do KiCad viu. Exata, e continua: o recozimento ainda sente o gradiente. */
+static int recorta(const double *ent, int n, double *sai, int lado, double v)
+{
+    int i, m = 0;
+    for (i = 0; i < n; i++) {
+        double ax = ent[i * 2], ay = ent[i * 2 + 1];
+        double bx = ent[((i + 1) % n) * 2], by = ent[((i + 1) % n) * 2 + 1];
+        /* lado: 0 x>=v, 1 x<=v, 2 y>=v, 3 y<=v */
+        double da = (lado == 0) ? ax - v : (lado == 1) ? v - ax : (lado == 2) ? ay - v : v - ay;
+        double db = (lado == 0) ? bx - v : (lado == 1) ? v - bx : (lado == 2) ? by - v : v - by;
+        if (da >= 0) { sai[m * 2] = ax; sai[m * 2 + 1] = ay; m++; }
+        if ((da >= 0) != (db >= 0)) {
+            double t = da / (da - db);
+            sai[m * 2] = ax + (bx - ax) * t;
+            sai[m * 2 + 1] = ay + (by - ay) * t;
+            m++;
+        }
+    }
+    return m;
+}
+
+static double area_no_retangulo(const double *p, int n,
+                                double x0, double y0, double x1, double y1)
+{
+    double a[256], b[256], area = 0.0;
+    int m, i;
+    if (n > 60) return 0.0;               /* poligono de regra real tem poucos pontos */
+    memcpy(a, p, (size_t)n * 2 * sizeof(double));
+    m = recorta(a, n, b, 0, x0);
+    m = recorta(b, m, a, 1, x1);
+    m = recorta(a, m, b, 2, y0);
+    m = recorta(b, m, a, 3, y1);
+    for (i = 0; i < m; i++)
+        area += a[i * 2] * a[((i + 1) % m) * 2 + 1] - a[((i + 1) % m) * 2] * a[i * 2 + 1];
+    return fabs(area) / 2.0;
+}
+
+/* So area que proibe FOOTPRINT - o KiCad tem essa proibicao separada da de
+ * trilha. E so peca que pode sair de la. */
 static double em_proibida(const Ctx *c)
 {
-    const double passo = 0.5;
     double total = 0.0;
     int z, i;
     for (z = 0; z < c->n_proibidas; z++) {
         const PbProibida *pz = &c->proibidas[z];
         if (!pz->sem_footprint) continue;
         for (i = 0; i < c->n_pecas; i++) {
-            double x0, y0, x1, y1, x, y;
-            int n = 0;
+            double x0, y0, x1, y1;
             if (!c->pecas[i].movel) continue;
             caixa(&c->pecas[i], &x0, &y0, &x1, &y1);
-            for (x = x0; x <= x1; x += passo)
-                for (y = y0; y <= y1; y += passo)
-                    if (dentro_poli(x, y, pz->pontos, pz->n_pontos)) n++;
-            total += n * passo * passo;
+            total += area_no_retangulo(pz->pontos, pz->n_pontos, x0, y0, x1, y1);
         }
+    }
+    return total;
+}
+
+/* Cobre de peca movel perto demais da borda, somado em mm. O DRC do KiCad pegou
+ * um pad de R4 colado no Edge.Cuts: a caixa do corpo estava dentro da placa, mas
+ * o pad nao respeitava a folga de borda que o projeto pede. */
+static double pads_na_borda(const Ctx *c)
+{
+    double total = 0.0;
+    int i;
+    for (i = 0; i < c->n_pads; i++) {
+        const PbPadC *pad = &c->pads[i];
+        double x, y, g, f;
+        if (!c->pecas[pad->peca].movel) continue;
+        pos_do_pad(c->pecas, pad, &x, &y);
+        g = c->pecas[pad->peca].giro;
+        f = (x - raio_na_direcao(pad, g, M_PI)) - (c->bx0 + c->r->borda);
+        if (f < 0) total -= f;
+        f = (c->bx1 - c->r->borda) - (x + raio_na_direcao(pad, g, 0.0));
+        if (f < 0) total -= f;
+        f = (y - raio_na_direcao(pad, g, -M_PI / 2)) - (c->by0 + c->r->borda);
+        if (f < 0) total -= f;
+        f = (c->by1 - c->r->borda) - (y + raio_na_direcao(pad, g, M_PI / 2));
+        if (f < 0) total -= f;
     }
     return total;
 }
@@ -210,7 +321,21 @@ static double custo(const Ctx *c)
     return comprimento(c) + espalhamento(c)
          + W_SOBREPOE * sobreposicao(c)
          + W_FORA * fora(c)
-         + W_PROIBIDA * em_proibida(c);
+         + W_PROIBIDA * em_proibida(c)
+         + W_PAD * pads_colados(c)
+         + W_PAD * pads_na_borda(c);
+}
+
+/* Posicao que se pode montar? O juiz so roteia o que passar daqui.
+ *
+ * Faltava: o juiz escolhia so por "quem fecha mais ligacoes", e posicao com peca
+ * empilhada pode muito bem rotear melhor - foi a que venceu e foi parar na tela.
+ * Restricao fisica nao entra na balanca com comprimento de fio. */
+static int legal(const Ctx *c)
+{
+    return sobreposicao(c) == 0.0 && fora(c) == 0.0
+        && em_proibida(c) == 0.0 && pads_colados(c) < 1e-6
+        && pads_na_borda(c) < 1e-6;
 }
 
 /* ------------------------------------------------------------------ recozimento */
@@ -305,6 +430,7 @@ static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
     if (n_contorno >= 3) {
         formas[nf].forma = PB_FORA_DE; formas[nf].rede = PB_DE_NINGUEM;
         formas[nf].faces = PB_AMBAS;
+        formas[nf].folga_extra = c->r->borda > c->r->folga ? c->r->borda - c->r->folga : 0.0;
         formas[nf].n_pontos = n_contorno; formas[nf].pontos = contorno;
         nf++;
     }
@@ -404,6 +530,7 @@ int pb_posiciona(const PbRegras *r,
     vencedor = (PbPeca *)malloc((size_t)n_pecas * sizeof(PbPeca));
     memcpy(inicial, pecas, (size_t)n_pecas * sizeof(PbPeca));
 
+    placar->descartados = 0;
     /* candidato 0: a posicao de entrada, intocada */
     melhor_ab = julga(&c, x0, y0, larg, alt, contorno, n_contorno, &melhor_vias, &melhor_fio);
     memcpy(vencedor, pecas, (size_t)n_pecas * sizeof(PbPeca));
@@ -416,6 +543,10 @@ int pb_posiciona(const PbRegras *r,
         memcpy(pecas, inicial, (size_t)n_pecas * sizeof(PbPeca));
         s ^= (unsigned long long)k * 0x9E3779B97F4A7C15ULL;
         recoze(&c, passos, &s);
+        if (!legal(&c)) {
+            placar->descartados++;
+            continue;
+        }
         ab = julga(&c, x0, y0, larg, alt, contorno, n_contorno, &nv, &fio);
         /* quem fecha mais ganha; empate, menos via; empate, menos fio */
         if (ab < melhor_ab

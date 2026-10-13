@@ -42,6 +42,12 @@ class Regras:
     # por camada - A* nisso e instantaneo.
     grade: float = 0.1
 
+    # Cobre ate a borda da placa. Vem do projeto (Board Setup do KiCad), nao
+    # daqui: o leitor sobrescreve. Faltava, e o DRC do KiCad pegou um pad de R4
+    # colado no Edge.Cuts - a trilha tambem ficava a 0,4 mm da borda, abaixo
+    # dos 0,5 que a placa pede.
+    borda: float = 0.5
+
     def dilatacao(self) -> float:
         """Quanto inflar cada obstaculo para o centro da trilha poder passar.
 

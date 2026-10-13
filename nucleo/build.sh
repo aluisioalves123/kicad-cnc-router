@@ -4,7 +4,7 @@
 set -e
 cd "$(dirname "$0")"
 case "$(uname -s 2>/dev/null || echo Windows)" in
-  MINGW*|MSYS*|CYGWIN*|Windows) alvo=perfcnc.dll; extra="" ;;
+  MINGW*|MSYS*|CYGWIN*|Windows*)alvo=perfcnc.dll; extra="" ;;
   *)                            alvo=perfcnc.so;  extra="-fPIC" ;;
 esac
 gcc -O2 -Wall -Wextra -std=c99 -shared $extra -o "$alvo" grade.c roteador.c projeto.c posicionador.c -lm
