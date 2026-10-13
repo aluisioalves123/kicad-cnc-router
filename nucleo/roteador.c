@@ -109,7 +109,15 @@ static int bloqueados(const int *soma, int cols, int c0, int l0, int c1, int l1)
  * sim, e so o que sobra - pouco - paga o preco do disco celula a celula. */
 static int cabe_via(PbMapa *m, int c, int l, int rede)
 {
-    double raio_mm = m->regras.via_ilha / 2.0 + m->regras.folga;
+    /* O mapa ja vem INFLADO: celula livre e centro a mais de meia trilha + folga
+     * de qualquer cobre alheio. A ilha da via precisa de folga a partir da BORDA
+     * dela, entao o raio a conferir no mapa inflado e ilha/2 - trilha/2.
+     *
+     * Era ilha/2 + folga: a folga entrava duas vezes e ainda somava meia trilha,
+     * e cada via exigia 1,4 mm de vao em vez de 0,5 - um circulo livre de 5,3 mm
+     * em vez de 3,5. Na placa apertada isso proibia quase toda via, e o roteador
+     * entregava ligacao aberta com a face de cima vazia. */
+    double raio_mm = m->regras.via_ilha / 2.0 - m->regras.trilha / 2.0;
     int fora = (int)ceil(raio_mm / m->regras.grade);
     int dentro = (int)(fora / RAIZ2);
     int face, dc, dl;
