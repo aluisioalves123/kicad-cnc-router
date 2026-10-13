@@ -28,8 +28,13 @@ class Regras:
     # Via. Na bancada ela e um furo comum, feito com a MESMA broca das ilhas - com
     # ilha grande, uma broca unica para tudo e mais comodo que trocar de ferramenta.
     # Entao o furo da via nao e um parametro independente: ele segue a broca.
-    broca: float = 0.4
-    via_ilha: float = 1.4          # cobre em volta do furo da via
+    # A broca e a MESMA das ilhas dos componentes: com ilha grande, uma ferramenta
+    # so para tudo e mais comoda na usinagem do que trocar de broca no meio.
+    broca: float = 0.8
+    # E a ilha da via tambem e do tamanho da ilha de componente, porque ela e
+    # soldada do mesmo jeito - com fio atravessando e ferro dos dois lados. Ilha
+    # pequena fica bonita na tela e impossivel de soldar na bancada.
+    via_ilha: float = 2.5
 
     # Grade do roteador. Aqui ela nao e imposta pela placa, como era na perfboard:
     # e escolha nossa. A 0,1 mm o erro geometrico fica em 0,05 mm, uma ordem de
