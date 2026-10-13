@@ -28,7 +28,7 @@
  * "15 pinos soltos" em toda configuracao. Demorei a desconfiar justamente porque
  * parecia certo. Binario incompativel tem de falhar na cara, nao mentir baixinho.
  */
-#define PB_ABI 4   /* 4: PbRegras ganha a folga cobre-borda */
+#define PB_ABI 6   /* 6: PbPeca leva os pontos do courtyard */
 /* (o corpo agora e o courtyard - mesma struct, mesma ABI) */
 
 /* ------------------------------------------------------------------ formas */
@@ -62,6 +62,7 @@ typedef struct {
 
     int salto_via;       /* a via so e tentada de N em N celulas */
     long orcamento;      /* teto de nos por busca; 0 = sem teto */
+    int tentativas;      /* passadas de rip-up & reroute por roteamento; 0 = 1 */
 } PbRegras;
 
 typedef struct {
@@ -93,6 +94,10 @@ typedef struct {
     double larg, alt;    /* corpo no referencial DA PECA (giro zero) */
     double cx, cy;       /* centro do corpo em relacao a origem, ref. da peca */
     int movel;
+    /* Pontos do courtyard no referencial da peca (pares x,y). O corpo e o casco
+     * convexo deles; sem pontos, vale a caixa larg x alt em (cx, cy). */
+    int n_corpo;
+    const double *corpo;
 } PbPeca;
 
 /* Pad no referencial da PECA, antes do giro dela. */
@@ -120,6 +125,9 @@ typedef struct {
     double fio;          /* mm */
     int vencedor;        /* 0 = a posicao de entrada continuou sendo a melhor */
     int descartados;     /* candidatos ilegais: peca empilhada, fora da placa... */
+    int julgados;        /* candidatos legais que foram roteados */
+    int nucleos;
+    double segundos;
 } PbPlacar;
 
 #ifdef __cplusplus
@@ -160,10 +168,11 @@ PB_EXPORT int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
 
 /* Procura posicao para as pecas moveis e deixa o ROTEADOR escolher.
  *
- * Gera `candidatos` posicoes por recozimento e roteia cada uma; fica a que fechar
- * mais ligacoes (empate: menos via, depois menos fio). O candidato zero e a
- * posicao de entrada intocada, entao o resultado nunca sai pior que ela. A
- * vencedora volta escrita em `pecas`. */
+ * Sorteia posicoes por recozimento, em `nucleos` threads (0 = todos), e roteia
+ * cada uma; fica a que fechar mais ligacoes (empate: menos via, depois menos
+ * fio). Para no primeiro candidato que fechar TUDO, ou em `segundos`, ou em
+ * `candidatos` (0 = sem teto). O candidato zero e a posicao de entrada intocada,
+ * entao o resultado nunca sai pior que ela. A vencedora volta em `pecas`. */
 PB_EXPORT int pb_posiciona(const PbRegras *regras,
                            double x0, double y0, double largura, double altura,
                            const double *contorno, int n_contorno,
@@ -171,6 +180,7 @@ PB_EXPORT int pb_posiciona(const PbRegras *regras,
                            PbPeca *pecas, int n_pecas,
                            const PbPadC *pads, int n_pads,
                            int candidatos, int passos, unsigned long long semente,
+                           double segundos, int nucleos,
                            PbPlacar *placar);
 
 PB_EXPORT int pb_roteia(PbMapa *m, int rede,

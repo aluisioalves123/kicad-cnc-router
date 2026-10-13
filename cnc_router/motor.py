@@ -105,8 +105,12 @@ def roteia(placa, regras, custos: Custos = None) -> Resultado:
     return Resultado(m.roteia_tudo(alvos), m, placa)
 
 
-def posiciona(placa, regras, candidatos=24, passos=3000, semente=1, custos=None):
+def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=1,
+              nucleos=0, custos=None):
     """Posiciona no C, com o roteador como juiz. Escreve a vencedora na placa.
+
+    Sorteia em todos os nucleos ate fechar a placa inteira ou acabar `segundos`
+    (`candidatos` > 0 poe teto tambem no numero de sorteios).
 
     Peca travada (cadeado do KiCad) e peca mecanica (sem rede: furo de fixacao)
     nao se movem. Devolve o placar: abertas antes e depois, vias e fio.
@@ -117,11 +121,18 @@ def posiciona(placa, regras, candidatos=24, passos=3000, semente=1, custos=None)
 
     com_rede = {pad.dono for pad in placa.pads if pad.rede}
     indice = {p.ref: i for i, p in enumerate(placa.pecas)}
+    corpos = []
+    for p in placa.pecas:
+        v = (ctypes.c_double * max(2, len(p.corpo) * 2))()
+        for k, (x, y) in enumerate(p.corpo):
+            v[k * 2], v[k * 2 + 1] = x, y
+        corpos.append(v)
     pecas = (nativo.PbPeca * len(placa.pecas))(*[
         nativo.PbPeca(x=p.x, y=p.y, giro=p.giro, larg=p.largura, alt=p.altura,
                       cx=p.cx, cy=p.cy,
-                      movel=int(not p.travada and p.ref in com_rede))
-        for p in placa.pecas])
+                      movel=int(not p.travada and p.ref in com_rede),
+                      n_corpo=len(p.corpo), corpo=corpos[i])
+        for i, p in enumerate(placa.pecas)])
     pads = (nativo.PbPadC * len(placa.pads))(*[
         nativo.PbPadC(peca=indice[pad.dono], rede=pad.rede,
                       forma=FORMA.get(pad.forma, nativo.RETANGULO),
@@ -155,7 +166,8 @@ def posiciona(placa, regras, candidatos=24, passos=3000, semente=1, custos=None)
                      contorno, len(placa.contorno),
                      proibidas, len(placa.proibidas),
                      pecas, len(placa.pecas), pads, len(placa.pads),
-                     candidatos, passos, semente, ctypes.byref(placar))
+                     candidatos, passos, semente, float(segundos), nucleos,
+                     ctypes.byref(placar))
 
     # a vencedora volta para a placa: pecas e, por consequencia, pads
     for i, p in enumerate(placa.pecas):

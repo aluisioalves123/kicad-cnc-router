@@ -12,7 +12,20 @@
  *
  * O candidato ZERO e a posicao de entrada, intocada. O resultado nunca pode sair
  * pior do que quem chamou ja tinha - na pior hipotese, nada muda.
+ *
+ * E como na perfboard: sorteia sem parar, em todos os nucleos, ate um candidato
+ * fechar a placa inteira ou o prazo acabar. Cada rede que nao fecha num sorteio
+ * passa a pesar mais no custo dos proximos, que entao aproximam os pads dela.
  */
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#define _POSIX_C_SOURCE 200809L
+#include <pthread.h>
+#include <time.h>
+#include <unistd.h>
+#endif
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,22 +65,6 @@ static double sorteio(unsigned long long *s)
 
 /* ------------------------------------------------------------------ geometria */
 
-/* O corpo NAO fica centrado na origem do footprint: num resistor ele esta 3,81 mm
- * deslocado, num TO-92 2,57 mm. Tratar como centrado jogou Q2 para fora da placa e
- * empilhou pecas enquanto o custo jurava que estava tudo certo. */
-static void caixa(const PbPeca *p, double *x0, double *y0, double *x1, double *y1)
-{
-    double larg = p->larg, alt = p->alt;
-    double a = -p->giro * M_PI / 180.0;          /* local -> mundo */
-    double mx = p->x + p->cx * cos(a) - p->cy * sin(a);
-    double my = p->y + p->cx * sin(a) + p->cy * cos(a);
-    int g = ((int)floor(p->giro + 0.5)) % 180;
-    if (g < 0) g += 180;
-    if (g == 90) { double t = larg; larg = alt; alt = t; }
-    *x0 = mx - larg / 2.0; *y0 = my - alt / 2.0;
-    *x1 = mx + larg / 2.0; *y1 = my + alt / 2.0;
-}
-
 static void pos_do_pad(const PbPeca *pecas, const PbPadC *pad, double *x, double *y)
 {
     const PbPeca *p = &pecas[pad->peca];
@@ -89,7 +86,137 @@ typedef struct {
     int n_pads;
     int *redes;                          /* redes distintas */
     int n_redes;
+    const double *peso;                  /* por rede (indice em `redes`); NULL = 1 */
+
+    /* Corpo de cada peca: casco convexo do courtyard, no referencial da peca. */
+    double *casco;                       /* MAX_CASCO pontos por peca */
+    const int *n_casco;
+    /* O mesmo casco ja no mundo, refeito a cada avaliacao. Rascunho de cada
+     * thread - por isso ponteiro, e nao parte do que e compartilhado. */
+    double *mundo;                       /* MAX_CASCO pontos por peca */
+    double *caixas;                      /* x0 y0 x1 y1 por peca */
 } Ctx;
+
+/* ------------------------------------------------------------------ corpo */
+
+/* O corpo e o COURTYARD de verdade, nao a caixa dele.
+ *
+ * A caixa errava duas vezes, e as duas reprovavam a placa feita a mao, que o DRC
+ * do KiCad aprova: o BBox() do KiCad inclui a largura da linha do courtyard (0,05
+ * mm de cada lado), e R3 e R4, que tem 0,01 mm de vao, saiam sobrepostos; e a
+ * caixa de um courtyard REDONDO (eletrolitico, furo de fixacao) tem cantos que o
+ * circulo nao tem, e os cantos caiam nas areas proibidas triangulares. Com a
+ * posicao de entrada ilegal, 95% dos sorteios iam para o lixo sem ser roteados.
+ *
+ * Casco convexo e nao o poligono cru: courtyard concavo vira o casco dele - mais
+ * severo, nunca mais frouxo -, e casco convexo e o que o recorte exato aceita. */
+#define MAX_CASCO 64
+
+static double area_com_sinal(const double *p, int n)
+{
+    double a = 0.0;
+    int i;
+    for (i = 0; i < n; i++)
+        a += p[i * 2] * p[((i + 1) % n) * 2 + 1] - p[((i + 1) % n) * 2] * p[i * 2 + 1];
+    return a / 2.0;
+}
+
+static int compara_pontos(const void *a, const void *b)
+{
+    const double *p = (const double *)a, *q = (const double *)b;
+    if (p[0] != q[0]) return p[0] < q[0] ? -1 : 1;
+    if (p[1] != q[1]) return p[1] < q[1] ? -1 : 1;
+    return 0;
+}
+
+static double vira(const double *o, const double *a, const double *b)
+{
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+}
+
+/* Cadeia monotona. `p` e reordenado. Devolve quantos pontos foram para `sai`
+ * (que precisa de espaco para 2n pontos). */
+static int casco_convexo(double *p, int n, double *sai)
+{
+    int i, k = 0, t;
+    if (n < 3) { memcpy(sai, p, (size_t)n * 2 * sizeof(double)); return n; }
+    qsort(p, (size_t)n, 2 * sizeof(double), compara_pontos);
+    for (i = 0; i < n; i++) {
+        while (k >= 2 && vira(&sai[(k - 2) * 2], &sai[(k - 1) * 2], &p[i * 2]) <= 0) k--;
+        sai[k * 2] = p[i * 2]; sai[k * 2 + 1] = p[i * 2 + 1]; k++;
+    }
+    for (i = n - 2, t = k + 1; i >= 0; i--) {
+        while (k >= t && vira(&sai[(k - 2) * 2], &sai[(k - 1) * 2], &p[i * 2]) <= 0) k--;
+        sai[k * 2] = p[i * 2]; sai[k * 2 + 1] = p[i * 2 + 1]; k++;
+    }
+    return k - 1;       /* o ultimo repete o primeiro */
+}
+
+/* Leva todos os cascos para o mundo e anota a caixa de cada um. Uma vez por
+ * avaliacao de custo: sobreposicao, borda e area proibida leem daqui. */
+static void corpos_no_mundo(const Ctx *c)
+{
+    int i, k;
+    for (i = 0; i < c->n_pecas; i++) {
+        const PbPeca *p = &c->pecas[i];
+        const double *l = &c->casco[i * MAX_CASCO * 2];
+        double *w = &c->mundo[i * MAX_CASCO * 2], *bx = &c->caixas[i * 4];
+        double a = -p->giro * M_PI / 180.0, ca = cos(a), sa = sin(a);   /* local -> mundo */
+        bx[0] = bx[1] = 1e300; bx[2] = bx[3] = -1e300;
+        for (k = 0; k < c->n_casco[i]; k++) {
+            double x = p->x + l[k * 2] * ca - l[k * 2 + 1] * sa;
+            double y = p->y + l[k * 2] * sa + l[k * 2 + 1] * ca;
+            w[k * 2] = x; w[k * 2 + 1] = y;
+            if (x < bx[0]) bx[0] = x;
+            if (y < bx[1]) bx[1] = y;
+            if (x > bx[2]) bx[2] = x;
+            if (y > bx[3]) bx[3] = y;
+        }
+    }
+}
+
+static void caixa(const Ctx *c, int i, double *x0, double *y0, double *x1, double *y1)
+{
+    const double *bx = &c->caixas[i * 4];
+    *x0 = bx[0]; *y0 = bx[1]; *x1 = bx[2]; *y1 = bx[3];
+}
+
+/* Area EXATA do poligono `sujeito` dentro do poligono CONVEXO `convexo`:
+ * Sutherland-Hodgman, um semiplano por aresta do convexo, e mede o que sobrou.
+ * O sujeito pode ser qualquer (area proibida concava inclusive). */
+#define MAX_RECORTE 512
+
+static int semiplano(const double *ent, int n, double *sai,
+                     const double *a, const double *b, double sinal)
+{
+    int i, m = 0;
+    for (i = 0; i < n; i++) {
+        const double *p = &ent[i * 2], *q = &ent[((i + 1) % n) * 2];
+        double dp = sinal * vira(a, b, p), dq = sinal * vira(a, b, q);
+        if (dp >= 0 && m < MAX_RECORTE) { sai[m * 2] = p[0]; sai[m * 2 + 1] = p[1]; m++; }
+        if ((dp >= 0) != (dq >= 0) && m < MAX_RECORTE) {
+            double t = dp / (dp - dq);
+            sai[m * 2] = p[0] + (q[0] - p[0]) * t;
+            sai[m * 2 + 1] = p[1] + (q[1] - p[1]) * t;
+            m++;
+        }
+    }
+    return m;
+}
+
+static double area_comum(const double *sujeito, int ns, const double *convexo, int nc)
+{
+    double a[MAX_RECORTE * 2], b[MAX_RECORTE * 2], sinal;
+    int m = ns, k;
+    if (ns < 3 || nc < 3 || ns > MAX_RECORTE) return 0.0;
+    sinal = area_com_sinal(convexo, nc) >= 0 ? 1.0 : -1.0;
+    memcpy(a, sujeito, (size_t)ns * 2 * sizeof(double));
+    for (k = 0; k < nc && m > 0; k++) {
+        m = semiplano(a, m, b, &convexo[k * 2], &convexo[((k + 1) % nc) * 2], sinal);
+        memcpy(a, b, (size_t)m * 2 * sizeof(double));
+    }
+    return m >= 3 ? fabs(area_com_sinal(a, m)) : 0.0;
+}
 
 /* Quanto o pad avanca na direcao `ang` (radianos, mundo). A pergunta nunca e "qual
  * o tamanho do pad", e sim quanto ele avanca NA DIRECAO do vizinho: num oval de
@@ -158,7 +285,8 @@ static double comprimento(const Ctx *c)
             if (y > mxy) mxy = y;
             n++;
         }
-        if (n >= 2) total += (mxx - mnx) + (mxy - mny);
+        if (n >= 2)
+            total += (c->peso ? c->peso[k] : 1.0) * ((mxx - mnx) + (mxy - mny));
     }
     return total;
 }
@@ -172,7 +300,7 @@ static double espalhamento(const Ctx *c)
     for (i = 0; i < c->n_pecas; i++) {
         double x0, y0, x1, y1, cx, cy;
         int col, lin;
-        caixa(&c->pecas[i], &x0, &y0, &x1, &y1);
+        caixa(c, i, &x0, &y0, &x1, &y1);
         cx = (x0 + x1) / 2.0; cy = (y0 + y1) / 2.0;
         col = (int)((cx - c->bx0) * REGIOES / (lx > 1e-9 ? lx : 1e-9));
         lin = (int)((cy - c->by0) * REGIOES / (ly > 1e-9 ? ly : 1e-9));
@@ -198,15 +326,15 @@ static double sobreposicao(const Ctx *c)
     int i, k;
     for (i = 0; i < c->n_pecas; i++) {
         double a0, b0, a1, b1;
-        caixa(&c->pecas[i], &a0, &b0, &a1, &b1);
+        caixa(c, i, &a0, &b0, &a1, &b1);
         for (k = i + 1; k < c->n_pecas; k++) {
-            double c0, d0, c1, d1, dx, dy;
+            double c0, d0, c1, d1, area;
             if (!c->pecas[i].movel && !c->pecas[k].movel) continue;
-            caixa(&c->pecas[k], &c0, &d0, &c1, &d1);
-            dx = (a1 < c1 ? a1 : c1) - (a0 > c0 ? a0 : c0);
-            dy = (b1 < d1 ? b1 : d1) - (b0 > d0 ? b0 : d0);
-            if (dx > 0 && dy > 0 && dx * dy > TOLERA_SOBREPOSICAO)
-                total += dx * dy;
+            caixa(c, k, &c0, &d0, &c1, &d1);
+            if (a1 <= c0 || c1 <= a0 || b1 <= d0 || d1 <= b0) continue;   /* longe */
+            area = area_comum(&c->mundo[i * MAX_CASCO * 2], c->n_casco[i],
+                              &c->mundo[k * MAX_CASCO * 2], c->n_casco[k]);
+            if (area > TOLERA_SOBREPOSICAO) total += area;
         }
     }
     return total;
@@ -221,55 +349,13 @@ static double fora(const Ctx *c)
     for (i = 0; i < c->n_pecas; i++) {
         double x0, y0, x1, y1;
         if (!c->pecas[i].movel) continue;
-        caixa(&c->pecas[i], &x0, &y0, &x1, &y1);
+        caixa(c, i, &x0, &y0, &x1, &y1);
         if (c->bx0 > x0) total += c->bx0 - x0;
         if (x1 > c->bx1) total += x1 - c->bx1;
         if (c->by0 > y0) total += c->by0 - y0;
         if (y1 > c->by1) total += y1 - c->by1;
     }
     return total;
-}
-
-/* Area EXATA do poligono dentro do retangulo: recorta o poligono pelos quatro
- * lados (Sutherland-Hodgman) e mede o que sobrou.
- *
- * Substitui uma amostragem de 0,5 em 0,5 mm, que deixava passar ponta de
- * triangulo menor que o passo - foi assim que J1 entrou numa area proibida e so o
- * DRC do KiCad viu. Exata, e continua: o recozimento ainda sente o gradiente. */
-static int recorta(const double *ent, int n, double *sai, int lado, double v)
-{
-    int i, m = 0;
-    for (i = 0; i < n; i++) {
-        double ax = ent[i * 2], ay = ent[i * 2 + 1];
-        double bx = ent[((i + 1) % n) * 2], by = ent[((i + 1) % n) * 2 + 1];
-        /* lado: 0 x>=v, 1 x<=v, 2 y>=v, 3 y<=v */
-        double da = (lado == 0) ? ax - v : (lado == 1) ? v - ax : (lado == 2) ? ay - v : v - ay;
-        double db = (lado == 0) ? bx - v : (lado == 1) ? v - bx : (lado == 2) ? by - v : v - by;
-        if (da >= 0) { sai[m * 2] = ax; sai[m * 2 + 1] = ay; m++; }
-        if ((da >= 0) != (db >= 0)) {
-            double t = da / (da - db);
-            sai[m * 2] = ax + (bx - ax) * t;
-            sai[m * 2 + 1] = ay + (by - ay) * t;
-            m++;
-        }
-    }
-    return m;
-}
-
-static double area_no_retangulo(const double *p, int n,
-                                double x0, double y0, double x1, double y1)
-{
-    double a[256], b[256], area = 0.0;
-    int m, i;
-    if (n > 60) return 0.0;               /* poligono de regra real tem poucos pontos */
-    memcpy(a, p, (size_t)n * 2 * sizeof(double));
-    m = recorta(a, n, b, 0, x0);
-    m = recorta(b, m, a, 1, x1);
-    m = recorta(a, m, b, 2, y0);
-    m = recorta(b, m, a, 3, y1);
-    for (i = 0; i < m; i++)
-        area += a[i * 2] * a[((i + 1) % m) * 2 + 1] - a[((i + 1) % m) * 2] * a[i * 2 + 1];
-    return fabs(area) / 2.0;
 }
 
 /* So area que proibe FOOTPRINT - o KiCad tem essa proibicao separada da de
@@ -282,10 +368,9 @@ static double em_proibida(const Ctx *c)
         const PbProibida *pz = &c->proibidas[z];
         if (!pz->sem_footprint) continue;
         for (i = 0; i < c->n_pecas; i++) {
-            double x0, y0, x1, y1;
             if (!c->pecas[i].movel) continue;
-            caixa(&c->pecas[i], &x0, &y0, &x1, &y1);
-            total += area_no_retangulo(pz->pontos, pz->n_pontos, x0, y0, x1, y1);
+            total += area_comum(pz->pontos, pz->n_pontos,
+                                &c->mundo[i * MAX_CASCO * 2], c->n_casco[i]);
         }
     }
     return total;
@@ -316,15 +401,21 @@ static double pads_na_borda(const Ctx *c)
     return total;
 }
 
-static double custo(const Ctx *c)
+/* Custo geometrico. Se `eh_legal` vier, diz tambem se a posicao se monta - com
+ * as mesmas contas, de graca, em vez de refazer tudo em legal(). */
+static double custo_e_lei(const Ctx *c, int *eh_legal)
 {
+    double sobre, fo, pr, cola, bo;
+    corpos_no_mundo(c);           /* o resto le os corpos ja no mundo */
+    sobre = sobreposicao(c); fo = fora(c); pr = em_proibida(c);
+    cola = pads_colados(c); bo = pads_na_borda(c);
+    if (eh_legal)
+        *eh_legal = sobre == 0.0 && fo == 0.0 && pr == 0.0 && cola < 1e-6 && bo < 1e-6;
     return comprimento(c) + espalhamento(c)
-         + W_SOBREPOE * sobreposicao(c)
-         + W_FORA * fora(c)
-         + W_PROIBIDA * em_proibida(c)
-         + W_PAD * pads_colados(c)
-         + W_PAD * pads_na_borda(c);
+         + W_SOBREPOE * sobre + W_FORA * fo + W_PROIBIDA * pr
+         + W_PAD * cola + W_PAD * bo;
 }
+
 
 /* Posicao que se pode montar? O juiz so roteia o que passar daqui.
  *
@@ -333,9 +424,9 @@ static double custo(const Ctx *c)
  * Restricao fisica nao entra na balanca com comprimento de fio. */
 static int legal(const Ctx *c)
 {
-    return sobreposicao(c) == 0.0 && fora(c) == 0.0
-        && em_proibida(c) == 0.0 && pads_colados(c) < 1e-6
-        && pads_na_borda(c) < 1e-6;
+    int ok;
+    custo_e_lei(c, &ok);
+    return ok;
 }
 
 /* ------------------------------------------------------------------ recozimento */
@@ -345,11 +436,17 @@ static double arredonda(double v)
     return floor(v / GRADE_POS + 0.5) * GRADE_POS;
 }
 
+/* Recozimento no custo geometrico.
+ *
+ * Devolve a melhor posicao LEGAL que visitou, e so cai para a melhor de todas se
+ * nenhuma legal apareceu. Antes devolvia a mais barata, e a mais barata quase
+ * sempre tinha um pad encostado em outro por decimos de mm: medido na blink
+ * blink, 6140 de 6280 sorteios iam para o lixo sem nem serem roteados. */
 static void recoze(Ctx *c, int passos, unsigned long long *s)
 {
-    int *moveis, n_moveis = 0, i, passo;
-    PbPeca *melhor_pose;
-    double atual, melhor, t0, alcance_max;
+    int *moveis, n_moveis = 0, i, passo, achou_legal = 0, ok;
+    PbPeca *melhor_pose, *melhor_legal;
+    double atual, melhor, melhor_lei = 1e300, t0, alcance_max;
 
     moveis = (int *)malloc((size_t)(c->n_pecas > 0 ? c->n_pecas : 1) * sizeof(int));
     for (i = 0; i < c->n_pecas; i++)
@@ -357,8 +454,13 @@ static void recoze(Ctx *c, int passos, unsigned long long *s)
     if (n_moveis == 0) { free(moveis); return; }
 
     melhor_pose = (PbPeca *)malloc((size_t)c->n_pecas * sizeof(PbPeca));
+    melhor_legal = (PbPeca *)malloc((size_t)c->n_pecas * sizeof(PbPeca));
     memcpy(melhor_pose, c->pecas, (size_t)c->n_pecas * sizeof(PbPeca));
-    atual = melhor = custo(c);
+    atual = melhor = custo_e_lei(c, &ok);
+    if (ok) {
+        achou_legal = 1; melhor_lei = atual;
+        memcpy(melhor_legal, c->pecas, (size_t)c->n_pecas * sizeof(PbPeca));
+    }
     alcance_max = ((c->bx1 - c->bx0) > (c->by1 - c->by0)
                    ? (c->bx1 - c->bx0) : (c->by1 - c->by0)) / 4.0;
     t0 = atual / n_moveis * 0.5;
@@ -387,7 +489,7 @@ static void recoze(Ctx *c, int passos, unsigned long long *s)
             c->pecas[b].x = tx; c->pecas[b].y = ty;
         }
 
-        novo = custo(c);
+        novo = custo_e_lei(c, &ok);
         d = novo - atual;
         if (d <= 0 || sorteio(s) < exp(-d / (t > 1e-9 ? t : 1e-9))) {
             atual = novo;
@@ -395,14 +497,20 @@ static void recoze(Ctx *c, int passos, unsigned long long *s)
                 melhor = novo;
                 memcpy(melhor_pose, c->pecas, (size_t)c->n_pecas * sizeof(PbPeca));
             }
+            if (ok && novo < melhor_lei) {
+                achou_legal = 1; melhor_lei = novo;
+                memcpy(melhor_legal, c->pecas, (size_t)c->n_pecas * sizeof(PbPeca));
+            }
         } else {
             c->pecas[a] = guarda_a;
             if (b >= 0) c->pecas[b] = guarda_b;
         }
     }
 
-    memcpy(c->pecas, melhor_pose, (size_t)c->n_pecas * sizeof(PbPeca));
+    memcpy(c->pecas, achou_legal ? melhor_legal : melhor_pose,
+           (size_t)c->n_pecas * sizeof(PbPeca));
     free(melhor_pose);
+    free(melhor_legal);
     free(moveis);
 }
 
@@ -412,7 +520,7 @@ static void recoze(Ctx *c, int passos, unsigned long long *s)
  * e preenche vias/comprimento para desempate. */
 static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
                  const double *contorno, int n_contorno,
-                 int *vias_out, double *fio_out)
+                 int *vias_out, double *fio_out, int *falhas)
 {
     PbMapa *m = pb_cria(c->r, x0, y0, larg, alt);
     PbForma *formas;
@@ -470,6 +578,13 @@ static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
     abertas = (PbAberta *)malloc(2000 * sizeof(PbAberta));
     pb_roteia_tudo(m, alvos, na, segs, 20000, vias, 4000, abertas, 2000, &ns, &nv, &nab);
 
+    /* quem nao fechou, por rede: e o que o sorteio aprende */
+    for (i = 0; i < nab; i++) {
+        int k;
+        for (k = 0; k < c->n_redes; k++)
+            if (c->redes[k] == abertas[i].rede) { falhas[k]++; break; }
+    }
+
     for (i = 0; i < ns; i++)
         fio += hypot(pb_x_de(m, segs[i].c2) - pb_x_de(m, segs[i].c1),
                      pb_y_de(m, segs[i].l2) - pb_y_de(m, segs[i].l1));
@@ -481,6 +596,155 @@ static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
     return nab;
 }
 
+/* ------------------------------------------------------------------ paralelo */
+
+/* Cada sorteio e independente - posiciona e roteia do zero -, entao mais nucleo e
+ * literalmente mais sorteio por segundo. O que eles dividem fica sob a trava: o
+ * contador de candidatos, a vencedora e o peso aprendido das redes. */
+#ifdef _WIN32
+typedef CRITICAL_SECTION Trava;
+typedef HANDLE Fio;
+static void trava_cria(Trava *t) { InitializeCriticalSection(t); }
+static void trava_fecha(Trava *t) { DeleteCriticalSection(t); }
+static void tranca(Trava *t) { EnterCriticalSection(t); }
+static void destranca(Trava *t) { LeaveCriticalSection(t); }
+static double agora(void) { return (double)GetTickCount64() / 1000.0; }
+static int nucleos_da_maquina(void)
+{
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return (int)si.dwNumberOfProcessors;
+}
+static void trabalha(void *arg);
+static DWORD WINAPI ponte(LPVOID a) { trabalha(a); return 0; }
+static int fio_cria(Fio *f, void *arg)
+{
+    *f = CreateThread(NULL, 0, ponte, arg, 0, NULL);
+    return *f != NULL;
+}
+static void fio_espera(Fio f) { WaitForSingleObject(f, INFINITE); CloseHandle(f); }
+#else
+typedef pthread_mutex_t Trava;
+typedef pthread_t Fio;
+static void trava_cria(Trava *t) { pthread_mutex_init(t, NULL); }
+static void trava_fecha(Trava *t) { pthread_mutex_destroy(t); }
+static void tranca(Trava *t) { pthread_mutex_lock(t); }
+static void destranca(Trava *t) { pthread_mutex_unlock(t); }
+static double agora(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec + (double)t.tv_nsec * 1e-9;
+}
+static int nucleos_da_maquina(void)
+{
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (int)n : 1;
+}
+static void trabalha(void *arg);
+static void *ponte(void *a) { trabalha(a); return NULL; }
+static int fio_cria(Fio *f, void *arg) { return pthread_create(f, NULL, ponte, arg) == 0; }
+static void fio_espera(Fio f) { pthread_join(f, NULL); }
+#endif
+
+#define PESO_POR_FALHA 0.5
+#define PESO_MAX       8.0
+
+typedef struct {
+    Ctx base;                    /* so leitura: geometria, pads, redes */
+    const PbPeca *inicial;
+    double x0, y0, larg, alt;
+    const double *contorno;
+    int n_contorno;
+    int passos;
+    unsigned long long semente;
+    int max_candidatos;          /* 0 = sem teto, vale so o prazo */
+    double prazo;                /* instante absoluto; <= 0 = sem prazo */
+
+    Trava trava;                 /* tudo daqui para baixo */
+    int proximo;
+    int acabou;
+    int melhor_ab, melhor_vias, vencedor;
+    double melhor_fio;
+    PbPeca *pose_vencedora;
+    double *peso;                /* por rede: quem nao fecha pesa mais no custo */
+    int descartados, julgados;
+} Sorteio;
+
+static int sorteio_continua(const Sorteio *g)
+{
+    if (g->acabou) return 0;
+    if (g->max_candidatos > 0 && g->proximo > g->max_candidatos) return 0;
+    if (g->prazo > 0 && agora() > g->prazo) return 0;
+    return 1;
+}
+
+/* Um nucleo: pega o proximo numero de candidato, recoze a partir da posicao de
+ * entrada, descarta se for ilegal, roteia, e conta no placar comum. Para quando
+ * alguem fechou a placa inteira, quando acabou o prazo ou o teto de candidatos. */
+static void trabalha(void *arg)
+{
+    Sorteio *g = (Sorteio *)arg;
+    Ctx c = g->base;
+    int nr = c.n_redes > 0 ? c.n_redes : 1, i;
+    PbPeca *pecas = (PbPeca *)malloc((size_t)c.n_pecas * sizeof(PbPeca));
+    double *peso = (double *)malloc((size_t)nr * sizeof(double));
+    int *falhas = (int *)malloc((size_t)nr * sizeof(int));
+    c.pecas = pecas;
+    c.peso = peso;
+    c.mundo = (double *)malloc((size_t)c.n_pecas * MAX_CASCO * 2 * sizeof(double));
+    c.caixas = (double *)malloc((size_t)c.n_pecas * 4 * sizeof(double));
+
+    for (;;) {
+        int k, ab, nv;
+        double fio;
+        unsigned long long s;
+
+        tranca(&g->trava);
+        if (!sorteio_continua(g)) { destranca(&g->trava); break; }
+        k = g->proximo++;
+        memcpy(peso, g->peso, (size_t)nr * sizeof(double));
+        destranca(&g->trava);
+
+        memcpy(pecas, g->inicial, (size_t)c.n_pecas * sizeof(PbPeca));
+        s = g->semente ^ ((unsigned long long)k * 0x9E3779B97F4A7C15ULL);
+        if (!s) s = 1;
+        proximo(&s);
+        recoze(&c, g->passos, &s);
+        if (!legal(&c)) {
+            tranca(&g->trava);
+            g->descartados++;
+            destranca(&g->trava);
+            continue;
+        }
+        memset(falhas, 0, (size_t)nr * sizeof(int));
+        ab = julga(&c, g->x0, g->y0, g->larg, g->alt, g->contorno, g->n_contorno,
+                   &nv, &fio, falhas);
+
+        tranca(&g->trava);
+        g->julgados++;
+        /* a rede que nao fechou ganha peso: os proximos sorteios aproximam os
+         * pads dela, como a perfboard fazia entre uma tentativa e outra */
+        for (i = 0; i < c.n_redes; i++)
+            if (falhas[i]) {
+                g->peso[i] += PESO_POR_FALHA * falhas[i];
+                if (g->peso[i] > PESO_MAX) g->peso[i] = PESO_MAX;
+            }
+        /* quem fecha mais ganha; empate, menos via; empate, menos fio */
+        if (ab < g->melhor_ab
+                || (ab == g->melhor_ab && nv < g->melhor_vias)
+                || (ab == g->melhor_ab && nv == g->melhor_vias && fio < g->melhor_fio - 1e-6)) {
+            g->melhor_ab = ab; g->melhor_vias = nv; g->melhor_fio = fio;
+            g->vencedor = k;
+            memcpy(g->pose_vencedora, pecas, (size_t)c.n_pecas * sizeof(PbPeca));
+        }
+        if (g->melhor_ab == 0) g->acabou = 1;
+        destranca(&g->trava);
+    }
+
+    free(pecas); free(peso); free(falhas); free(c.mundo); free(c.caixas);
+}
+
 /* ------------------------------------------------------------------ api */
 
 int pb_posiciona(const PbRegras *r,
@@ -490,79 +754,126 @@ int pb_posiciona(const PbRegras *r,
                  PbPeca *pecas, int n_pecas,
                  const PbPadC *pads, int n_pads,
                  int candidatos, int passos, unsigned long long semente,
+                 double segundos, int nucleos,
                  PbPlacar *placar)
 {
-    Ctx c;
-    PbPeca *inicial, *vencedor;
-    int k, i, melhor_ab, melhor_vias;
-    double melhor_fio;
-    unsigned long long s = semente ? semente : 0x9E3779B97F4A7C15ULL;
+    Sorteio g;
+    Ctx *c = &g.base;
+    Fio *fios;
+    int i, n_fios = 0, nr, *falhas, *n_casco;
+    double t0 = agora();
 
-    memset(&c, 0, sizeof(c));
-    c.r = r;
-    c.proibidas = proibidas; c.n_proibidas = n_proibidas;
-    c.pecas = pecas; c.n_pecas = n_pecas;
-    c.pads = pads; c.n_pads = n_pads;
+    memset(&g, 0, sizeof(g));
+    c->r = r;
+    c->proibidas = proibidas; c->n_proibidas = n_proibidas;
+    c->pecas = pecas; c->n_pecas = n_pecas;
+    c->pads = pads; c->n_pads = n_pads;
 
     if (n_contorno >= 3) {
-        c.bx0 = c.bx1 = contorno[0];
-        c.by0 = c.by1 = contorno[1];
+        c->bx0 = c->bx1 = contorno[0];
+        c->by0 = c->by1 = contorno[1];
         for (i = 1; i < n_contorno; i++) {
             double x = contorno[i * 2], y = contorno[i * 2 + 1];
-            if (x < c.bx0) c.bx0 = x;
-            if (x > c.bx1) c.bx1 = x;
-            if (y < c.by0) c.by0 = y;
-            if (y > c.by1) c.by1 = y;
+            if (x < c->bx0) c->bx0 = x;
+            if (x > c->bx1) c->bx1 = x;
+            if (y < c->by0) c->by0 = y;
+            if (y > c->by1) c->by1 = y;
         }
     } else {
-        c.bx0 = x0; c.by0 = y0; c.bx1 = x0 + larg; c.by1 = y0 + alt;
+        c->bx0 = x0; c->by0 = y0; c->bx1 = x0 + larg; c->by1 = y0 + alt;
     }
 
-    c.redes = (int *)malloc((size_t)(n_pads > 0 ? n_pads : 1) * sizeof(int));
+    c->redes = (int *)malloc((size_t)(n_pads > 0 ? n_pads : 1) * sizeof(int));
     for (i = 0; i < n_pads; i++) {
         int j, ja = 0;
         if (!pads[i].rede) continue;
-        for (j = 0; j < c.n_redes; j++) if (c.redes[j] == pads[i].rede) { ja = 1; break; }
-        if (!ja) c.redes[c.n_redes++] = pads[i].rede;
+        for (j = 0; j < c->n_redes; j++) if (c->redes[j] == pads[i].rede) { ja = 1; break; }
+        if (!ja) c->redes[c->n_redes++] = pads[i].rede;
     }
+    nr = c->n_redes > 0 ? c->n_redes : 1;
 
-    inicial = (PbPeca *)malloc((size_t)n_pecas * sizeof(PbPeca));
-    vencedor = (PbPeca *)malloc((size_t)n_pecas * sizeof(PbPeca));
-    memcpy(inicial, pecas, (size_t)n_pecas * sizeof(PbPeca));
-
-    placar->descartados = 0;
-    /* candidato 0: a posicao de entrada, intocada */
-    melhor_ab = julga(&c, x0, y0, larg, alt, contorno, n_contorno, &melhor_vias, &melhor_fio);
-    memcpy(vencedor, pecas, (size_t)n_pecas * sizeof(PbPeca));
-    placar->abertas_antes = melhor_ab;
-    placar->vencedor = 0;
-
-    for (k = 1; k <= candidatos; k++) {
-        int ab, nv;
-        double fio;
-        memcpy(pecas, inicial, (size_t)n_pecas * sizeof(PbPeca));
-        s ^= (unsigned long long)k * 0x9E3779B97F4A7C15ULL;
-        recoze(&c, passos, &s);
-        if (!legal(&c)) {
-            placar->descartados++;
-            continue;
+    /* casco de cada peca; sem courtyard (ou com courtyard grande demais para o
+     * recorte), a caixa que veio em larg/alt/cx/cy */
+    c->casco = (double *)calloc((size_t)(n_pecas > 0 ? n_pecas : 1) * MAX_CASCO * 2,
+                                sizeof(double));
+    n_casco = (int *)calloc((size_t)(n_pecas > 0 ? n_pecas : 1), sizeof(int));
+    c->n_casco = n_casco;
+    for (i = 0; i < n_pecas; i++) {
+        double *dst = &c->casco[i * MAX_CASCO * 2];
+        const PbPeca *pc = &pecas[i];
+        int n = 0;
+        if (pc->n_corpo >= 3) {
+            double *tmp = (double *)malloc((size_t)pc->n_corpo * 2 * sizeof(double));
+            double *h = (double *)malloc((size_t)(pc->n_corpo * 2 + 2) * 2 * sizeof(double));
+            memcpy(tmp, pc->corpo, (size_t)pc->n_corpo * 2 * sizeof(double));
+            n = casco_convexo(tmp, pc->n_corpo, h);
+            if (n >= 3 && n <= MAX_CASCO) memcpy(dst, h, (size_t)n * 2 * sizeof(double));
+            else n = 0;
+            free(tmp); free(h);
         }
-        ab = julga(&c, x0, y0, larg, alt, contorno, n_contorno, &nv, &fio);
-        /* quem fecha mais ganha; empate, menos via; empate, menos fio */
-        if (ab < melhor_ab
-                || (ab == melhor_ab && nv < melhor_vias)
-                || (ab == melhor_ab && nv == melhor_vias && fio < melhor_fio - 1e-6)) {
-            melhor_ab = ab; melhor_vias = nv; melhor_fio = fio;
-            memcpy(vencedor, pecas, (size_t)n_pecas * sizeof(PbPeca));
-            placar->vencedor = k;
+        if (n == 0) {
+            double hx = pc->larg / 2.0, hy = pc->alt / 2.0;
+            dst[0] = pc->cx - hx; dst[1] = pc->cy - hy;
+            dst[2] = pc->cx + hx; dst[3] = pc->cy - hy;
+            dst[4] = pc->cx + hx; dst[5] = pc->cy + hy;
+            dst[6] = pc->cx - hx; dst[7] = pc->cy + hy;
+            n = 4;
         }
+        n_casco[i] = n;
     }
+    c->mundo = (double *)malloc((size_t)(n_pecas > 0 ? n_pecas : 1) * MAX_CASCO * 2
+                                * sizeof(double));
+    c->caixas = (double *)malloc((size_t)(n_pecas > 0 ? n_pecas : 1) * 4 * sizeof(double));
 
-    memcpy(pecas, vencedor, (size_t)n_pecas * sizeof(PbPeca));
-    placar->abertas_depois = melhor_ab;
-    placar->vias = melhor_vias;
-    placar->fio = melhor_fio;
+    g.peso = (double *)malloc((size_t)nr * sizeof(double));
+    for (i = 0; i < nr; i++) g.peso[i] = 1.0;
+    falhas = (int *)calloc((size_t)nr, sizeof(int));
 
-    free(inicial); free(vencedor); free(c.redes);
-    return melhor_ab;
+    g.inicial = (PbPeca *)malloc((size_t)n_pecas * sizeof(PbPeca));
+    g.pose_vencedora = (PbPeca *)malloc((size_t)n_pecas * sizeof(PbPeca));
+    memcpy((PbPeca *)g.inicial, pecas, (size_t)n_pecas * sizeof(PbPeca));
+    memcpy(g.pose_vencedora, pecas, (size_t)n_pecas * sizeof(PbPeca));
+    g.x0 = x0; g.y0 = y0; g.larg = larg; g.alt = alt;
+    g.contorno = contorno; g.n_contorno = n_contorno;
+    g.passos = passos;
+    g.semente = semente ? semente : 0x9E3779B97F4A7C15ULL;
+    g.max_candidatos = candidatos;
+    g.prazo = segundos > 0 ? t0 + segundos : 0.0;
+    if (g.max_candidatos <= 0 && g.prazo <= 0) g.max_candidatos = 24;  /* nunca sem fim */
+
+    /* candidato 0: a posicao de entrada, intocada - e as redes dela que nao
+     * fecham ja comecam com peso */
+    g.melhor_ab = julga(c, x0, y0, larg, alt, contorno, n_contorno,
+                        &g.melhor_vias, &g.melhor_fio, falhas);
+    for (i = 0; i < c->n_redes; i++)
+        if (falhas[i]) g.peso[i] += PESO_POR_FALHA * falhas[i];
+    placar->abertas_antes = g.melhor_ab;
+    g.vencedor = 0;
+    g.proximo = 1;
+    g.acabou = (g.melhor_ab == 0);
+
+    if (nucleos <= 0) nucleos = nucleos_da_maquina();
+    if (nucleos < 1) nucleos = 1;
+    fios = (Fio *)malloc((size_t)nucleos * sizeof(Fio));
+    trava_cria(&g.trava);
+    for (i = 0; i < nucleos; i++)
+        if (fio_cria(&fios[n_fios], &g)) n_fios++;
+    if (n_fios == 0) trabalha(&g);          /* sem thread: roda aqui mesmo */
+    for (i = 0; i < n_fios; i++) fio_espera(fios[i]);
+    trava_fecha(&g.trava);
+
+    memcpy(pecas, g.pose_vencedora, (size_t)n_pecas * sizeof(PbPeca));
+    placar->abertas_depois = g.melhor_ab;
+    placar->vias = g.melhor_vias;
+    placar->fio = g.melhor_fio;
+    placar->vencedor = g.vencedor;
+    placar->descartados = g.descartados;
+    placar->julgados = g.julgados;
+    placar->nucleos = n_fios > 0 ? n_fios : 1;
+    placar->segundos = agora() - t0;
+
+    free(fios); free(falhas); free(g.peso);
+    free((PbPeca *)g.inicial); free(g.pose_vencedora); free(c->redes);
+    free(c->casco); free(n_casco); free(c->mundo); free(c->caixas);
+    return g.melhor_ab;
 }

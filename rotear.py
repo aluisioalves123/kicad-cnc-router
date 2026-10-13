@@ -37,9 +37,10 @@ def principal(caminho: str) -> int:
 
     t0 = time.time()
     placar = motor.posiciona(p, regras)
-    print("posicionado em %.1fs: abertas %d -> %d (candidato %d)"
+    print("posicionado em %.1fs: abertas %d -> %d (candidato %d; %d sorteios "
+          "roteados, %d ilegais descartados, %d nucleos)"
           % (time.time() - t0, placar.abertas_antes, placar.abertas_depois,
-             placar.vencedor))
+             placar.vencedor, placar.julgados, placar.descartados, placar.nucleos))
 
     t0 = time.time()
     res = motor.roteia(p, regras)

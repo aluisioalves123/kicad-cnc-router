@@ -11,7 +11,7 @@ from __future__ import annotations
 import ctypes
 import os
 
-ABI_ESPERADA = 4
+ABI_ESPERADA = 6
 
 CIRCULO, CAPSULA, RETANGULO, POLIGONO, FORA_DE, SEGMENTO = 0, 1, 2, 3, 4, 5
 CIMA, BAIXO, AMBAS = 1, 2, 3
@@ -27,6 +27,7 @@ class PbRegras(ctypes.Structure):
         ("peso_cima", ctypes.c_double),
         ("borda", ctypes.c_double),
         ("salto_via", ctypes.c_int), ("orcamento", ctypes.c_long),
+        ("tentativas", ctypes.c_int),
     ]
 
 
@@ -62,7 +63,8 @@ class PbPeca(ctypes.Structure):
     _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double),
                 ("giro", ctypes.c_double), ("larg", ctypes.c_double),
                 ("alt", ctypes.c_double), ("cx", ctypes.c_double),
-                ("cy", ctypes.c_double), ("movel", ctypes.c_int)]
+                ("cy", ctypes.c_double), ("movel", ctypes.c_int),
+                ("n_corpo", ctypes.c_int), ("corpo", ctypes.POINTER(ctypes.c_double))]
 
 
 class PbPadC(ctypes.Structure):
@@ -81,7 +83,9 @@ class PbProibida(ctypes.Structure):
 class PbPlacar(ctypes.Structure):
     _fields_ = [("abertas_antes", ctypes.c_int), ("abertas_depois", ctypes.c_int),
                 ("vias", ctypes.c_int), ("fio", ctypes.c_double),
-                ("vencedor", ctypes.c_int), ("descartados", ctypes.c_int)]
+                ("vencedor", ctypes.c_int), ("descartados", ctypes.c_int),
+                ("julgados", ctypes.c_int), ("nucleos", ctypes.c_int),
+                ("segundos", ctypes.c_double)]
 
 
 class NucleoAusente(RuntimeError):
@@ -142,6 +146,7 @@ def _assina(lib):
                                  P(PbPeca), ctypes.c_int,
                                  P(PbPadC), ctypes.c_int,
                                  ctypes.c_int, ctypes.c_int, ctypes.c_ulonglong,
+                                 ctypes.c_double, ctypes.c_int,
                                  P(PbPlacar)]
     lib.pb_roteia.restype = ctypes.c_int
     lib.pb_roteia.argtypes = [ctypes.c_void_p, ctypes.c_int,
@@ -160,7 +165,8 @@ def lib():
     return _LIB
 
 
-def regras_para_c(regras, custos=None, salto_via=5, orcamento=3000000) -> PbRegras:
+def regras_para_c(regras, custos=None, salto_via=5, orcamento=3000000,
+                  tentativas=6) -> PbRegras:
     c = custos
     return PbRegras(
         trilha=regras.trilha, folga=regras.folga, grade=regras.grade,
@@ -169,7 +175,7 @@ def regras_para_c(regras, custos=None, salto_via=5, orcamento=3000000) -> PbRegr
         custo_via=getattr(c, "via", 40.0),
         peso_cima=getattr(c, "face_de_cima", 1.15),
         borda=regras.borda,
-        salto_via=salto_via, orcamento=orcamento,
+        salto_via=salto_via, orcamento=orcamento, tentativas=tentativas,
     )
 
 

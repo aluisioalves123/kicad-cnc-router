@@ -220,6 +220,9 @@ void pb_destroi(PbMapa *m)
     free(m->celulas);
     free(m->soma[0]);
     free(m->soma[1]);
+    free(m->g);
+    free(m->veio);
+    free(m->carimbo);
     free(m);
 }
 

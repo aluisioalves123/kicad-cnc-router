@@ -104,6 +104,10 @@ class Peca:
     #   no posicionador trocava largura e altura duas vezes na peca a 90 graus.
     largura: float
     altura: float
+    # Pontos do courtyard no referencial da peca. O corpo de verdade: o C usa o
+    # casco convexo deles. largura/altura/cx/cy ficam como reserva para peca
+    # sem courtyard.
+    corpo: list = field(default_factory=list)
     cx: float = 0.0
     cy: float = 0.0
     pads: list = field(default_factory=list)
@@ -165,6 +169,25 @@ def _caixa_do_courtyard(fp):
     return fp.GetBoundingBox(False, False)
 
 
+def _pontos_do_courtyard(fp) -> list:
+    """Vertices do courtyard, no mundo, em mm.
+
+    Os pontos e nao o BBox(): o BBox() do KiCad soma a largura da linha do
+    courtyard, e foi isso que fez R3 e R4 - 0,01 mm de vao, segundo o DRC do
+    proprio KiCad - parecerem sobrepostos.
+    """
+    for camada in (pcbnew.F_CrtYd, pcbnew.B_CrtYd):
+        poly = fp.GetCourtyard(camada)
+        if poly.OutlineCount():
+            pts = []
+            for k in range(poly.OutlineCount()):
+                o = poly.Outline(k)
+                pts += [(mm(o.CPoint(i).x), mm(o.CPoint(i).y))
+                        for i in range(o.PointCount())]
+            return pts
+    return []
+
+
 def _poligono_do_contorno(board) -> list:
     """Contorno da placa como lista de pontos, em mm.
 
@@ -215,6 +238,9 @@ def ler(board) -> Placa:
             largura=larg, altura=alt,
             cx=wx * math.cos(a) - wy * math.sin(a),
             cy=wx * math.sin(a) + wy * math.cos(a),
+            corpo=[((x - ox) * math.cos(a) - (y - oy) * math.sin(a),
+                    (x - ox) * math.sin(a) + (y - oy) * math.cos(a))
+                   for x, y in _pontos_do_courtyard(fp)],
         )
         p.pecas.append(peca)
         for pad in fp.Pads():

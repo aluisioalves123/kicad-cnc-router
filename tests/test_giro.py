@@ -84,6 +84,25 @@ class TestGiro(unittest.TestCase):
                     pior = (erro, "%s a %.0f graus" % (p.ref, ang))
         self.assertLess(pior[0], 0.05, "corpo fora do lugar: %.3f mm em %s" % pior)
 
+    def test_courtyard_cai_onde_o_kicad_poe(self):
+        """Os pontos do corpo, girados pela nossa conta, contra o courtyard que o
+        proprio KiCad gira - inclusive a 45 graus, onde caixa nenhuma serve."""
+        pecas = {x.ref: x for x in self.p.pecas}
+        pior = (0.0, "")
+        for fp in self.board.GetFootprints():
+            ox, oy = F(fp.GetPosition().x), F(fp.GetPosition().y)
+            p = pecas[fp.GetReference()]
+            for ang in ANGULOS:
+                fp.SetOrientationDegrees(ang)
+                kicad = leitor._pontos_do_courtyard(fp)
+                nosso = [local_para_mundo(ox, oy, ang, x, y) for x, y in p.corpo]
+                self.assertEqual(len(kicad), len(nosso), p.ref)
+                for (kx, ky), (nx, ny) in zip(kicad, nosso):
+                    erro = math.hypot(kx - nx, ky - ny)
+                    if erro > pior[0]:
+                        pior = (erro, "%s a %.0f graus" % (p.ref, ang))
+        self.assertLess(pior[0], 1e-3, "courtyard fora do lugar: %.3f mm em %s" % pior)
+
     def test_forma_do_pad_pintada_bate_com_o_kicad(self):
         """O C pinta o oval girado onde o KiCad diz que o pad esta?
 

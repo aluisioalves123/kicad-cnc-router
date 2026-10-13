@@ -155,10 +155,10 @@ int pb_roteia(PbMapa *m, int rede,
               int *saida, int max_saida)
 {
     int cols = m->colunas, lins = m->linhas;
-    long total = (long)cols * lins * 2 * PB_ESTADOS;
-    double *g = NULL;
-    int *veio = NULL;
-    char *fechado = NULL;
+    size_t total = (size_t)cols * lins * 2 * PB_ESTADOS;
+    float *g;
+    int *veio;
+    unsigned *carimbo, aberto, fechado;
     Heap h = { NULL, 0, 0 };
     long gastos = 0;
     int achou = -1, i, n = 0;
@@ -166,17 +166,35 @@ int pb_roteia(PbMapa *m, int rede,
     if (n_origens <= 0 || n_alvos <= 0) return -1;
     prepara_via(m, rede);
 
-    g = (double *)malloc((size_t)total * sizeof(double));
-    veio = (int *)malloc((size_t)total * sizeof(int));
-    fechado = (char *)calloc((size_t)total, 1);
-    if (!g || !veio || !fechado) { free(g); free(veio); free(fechado); return -1; }
-    for (i = 0; i < total; i++) { g[i] = 1e30; veio[i] = -1; }
+    if (!m->carimbo) {
+        m->g = (float *)malloc(total * sizeof(float));
+        m->veio = (int *)malloc(total * sizeof(int));
+        m->carimbo = (unsigned *)calloc(total, sizeof(unsigned));
+        m->busca = 0;
+        if (!m->g || !m->veio || !m->carimbo) {
+            free(m->g); free(m->veio); free(m->carimbo);
+            m->g = NULL; m->veio = NULL; m->carimbo = NULL;
+            return -1;
+        }
+    }
+    if (m->busca >= 0x7FFFFFF0u) {          /* o carimbo deu a volta: zera uma vez */
+        memset(m->carimbo, 0, total * sizeof(unsigned));
+        m->busca = 0;
+    }
+    m->busca++;
+    g = m->g; veio = m->veio; carimbo = m->carimbo;
+    aberto = m->busca * 2;
+    fechado = aberto + 1;
+/* g do estado nesta busca; estado que esta busca nao tocou vale infinito */
+#define G_DE(e) (carimbo[e] >= aberto ? g[e] : 1e30f)
 
     for (i = 0; i < n_origens; i++) {
         int c = origens[i * 3], l = origens[i * 3 + 1], f = origens[i * 3 + 2];
         int est = ((l * cols + c) * 2 + f) * PB_ESTADOS + PB_PARADO;
         if (c < 0 || l < 0 || c >= cols || l >= lins) continue;
-        g[est] = 0.0;
+        g[est] = 0.0f;
+        veio[est] = -1;
+        carimbo[est] = aberto;
         heap_push(&h, estimativa(c, l, alvos, n_alvos), 0.0, est);
     }
 
@@ -189,8 +207,8 @@ int pb_roteia(PbMapa *m, int rede,
         if (m->regras.orcamento > 0 && ++gastos > m->regras.orcamento) break;
 
         est = no.estado;
-        if (fechado[est]) continue;
-        fechado[est] = 1;
+        if (carimbo[est] == fechado) continue;
+        carimbo[est] = fechado;
         gcur = no.g;
 
         dir = est % PB_ESTADOS;
@@ -224,9 +242,10 @@ int pb_roteia(PbMapa *m, int rede,
             }
             prox = ((nl * cols + nc) * 2 + face) * PB_ESTADOS + d;
             ng = gcur + custo;
-            if (ng < g[prox] - 1e-9) {
-                g[prox] = ng;
+            if (ng < G_DE(prox) - 1e-4) {
+                g[prox] = (float)ng;
                 veio[prox] = est;
+                if (carimbo[prox] != fechado) carimbo[prox] = aberto;
                 heap_push(&h, ng + estimativa(nc, nl, alvos, n_alvos), ng, prox);
             }
         }
@@ -241,9 +260,10 @@ int pb_roteia(PbMapa *m, int rede,
             if (cabe_via(m, c, l, rede)) {
                 int prox = ((l * cols + c) * 2 + outra) * PB_ESTADOS + PB_PARADO;
                 double ng = gcur + m->regras.custo_via;
-                if (ng < g[prox] - 1e-9) {
-                    g[prox] = ng;
+                if (ng < G_DE(prox) - 1e-4) {
+                    g[prox] = (float)ng;
                     veio[prox] = est;
+                    if (carimbo[prox] != fechado) carimbo[prox] = aberto;
                     heap_push(&h, ng + estimativa(c, l, alvos, n_alvos), ng, prox);
                 }
             }
@@ -255,7 +275,7 @@ int pb_roteia(PbMapa *m, int rede,
         /* conta primeiro, para saber se cabe antes de escrever */
         for (n = 0; est >= 0; est = veio[est]) n++;
         if (n * 4 > max_saida) {
-            free(g); free(veio); free(fechado); free(h.v);
+            free(h.v);
             return -2;
         }
         est = achou;
@@ -270,6 +290,7 @@ int pb_roteia(PbMapa *m, int rede,
         }
     }
 
-    free(g); free(veio); free(fechado); free(h.v);
+#undef G_DE
+    free(h.v);
     return (achou >= 0) ? n : -1;
 }
