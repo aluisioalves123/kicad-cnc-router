@@ -138,6 +138,7 @@ class Placa:
     vias: list = field(default_factory=list)
     abertas: int = 0
     borda: float = 0.5         # folga cobre-borda do Board Setup
+    folga: float = 0.0         # maior folga entre redes que o projeto exige
 
     def pads_da_rede(self, rede: int):
         return [p for p in self.pads if p.rede == rede]
@@ -301,4 +302,10 @@ def ler(board) -> Placa:
 
     p.abertas = board.GetConnectivity().GetUnconnectedCount(False)
     p.borda = mm(board.GetDesignSettings().m_CopperEdgeClearance)
+    # A folga EFETIVA de cada pad, ja resolvida pelo KiCad: classe de rede,
+    # regra customizada, o que houver. Ler a classe Default na mao deixaria de
+    # fora qualquer outra regra que o projeto tenha.
+    p.folga = max([mm(pad.GetOwnClearance(pcbnew.B_Cu))
+                   for fp in board.GetFootprints() for pad in fp.Pads()
+                   if pad.GetNetCode() > 0] or [0.0])
     return p

@@ -48,6 +48,18 @@ class Regras:
     # dos 0,5 que a placa pede.
     borda: float = 0.5
 
+    def do_projeto(self, placa) -> "Regras":
+        """Aplica o que o projeto do KiCad exige por cima do que a bancada exige.
+
+        A folga entre redes fica a MAIOR das duas: 0,4 e o minimo que a fresa
+        aguenta, mas se o projeto pede 0,5 (o blink blink pede, na classe
+        Default) e a trilha sai a 0,45, o DRC do KiCad reprova a placa inteira -
+        foram 26 violacoes na primeira vez que o botao aplicou um roteamento.
+        """
+        self.borda = placa.borda
+        self.folga = max(self.folga, placa.folga)
+        return self
+
     def dilatacao(self) -> float:
         """Quanto inflar cada obstaculo para o centro da trilha poder passar.
 

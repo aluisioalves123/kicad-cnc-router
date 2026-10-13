@@ -106,11 +106,14 @@ def roteia(placa, regras, custos: Custos = None) -> Resultado:
 
 
 def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=1,
-              nucleos=0, custos=None):
+              nucleos=0, custos=None, placar=None):
     """Posiciona no C, com o roteador como juiz. Escreve a vencedora na placa.
 
     Sorteia em todos os nucleos ate fechar a placa inteira ou acabar `segundos`
     (`candidatos` > 0 poe teto tambem no numero de sorteios).
+
+    `placar` (um nativo.PbPlacar) e opcional: quem passa o seu pode le-lo de outra
+    thread enquanto o C trabalha, e por `placar.parar = 1` para encerrar.
 
     Peca travada (cadeado do KiCad) e peca mecanica (sem rede: furo de fixacao)
     nao se movem. Devolve o placar: abertas antes e depois, vias e fio.
@@ -159,7 +162,8 @@ def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=
                                          sem_footprint=int(z.sem_footprint),
                                          n_pontos=len(z.poligono), pontos=pts)
 
-    placar = nativo.PbPlacar()
+    if placar is None:
+        placar = nativo.PbPlacar()
     lib.pb_posiciona(ctypes.byref(rc),
                      placa.x0 - margem, placa.y0 - margem,
                      placa.largura + 2 * margem, placa.altura + 2 * margem,

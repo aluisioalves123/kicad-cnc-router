@@ -28,7 +28,7 @@
  * "15 pinos soltos" em toda configuracao. Demorei a desconfiar justamente porque
  * parecia certo. Binario incompativel tem de falhar na cara, nao mentir baixinho.
  */
-#define PB_ABI 6   /* 6: PbPeca leva os pontos do courtyard */
+#define PB_ABI 7   /* 7: PbPlacar ao vivo, com pedido de parar */
 /* (o corpo agora e o courtyard - mesma struct, mesma ABI) */
 
 /* ------------------------------------------------------------------ formas */
@@ -128,6 +128,11 @@ typedef struct {
     int julgados;        /* candidatos legais que foram roteados */
     int nucleos;
     double segundos;
+    /* Quem chamou poe 1 aqui para parar: cada nucleo termina o sorteio em que
+     * esta e o resultado sai com a melhor ate entao. Enquanto roda, o C mantem
+     * julgados/descartados/abertas_depois/vias/vencedor atualizados - e o que a
+     * janela do KiCad mostra. */
+    volatile int parar;
 } PbPlacar;
 
 #ifdef __cplusplus
@@ -168,7 +173,7 @@ PB_EXPORT int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
 
 /* Procura posicao para as pecas moveis e deixa o ROTEADOR escolher.
  *
- * Sorteia posicoes por recozimento, em `nucleos` threads (0 = todos), e roteia
+ * Sorteia posicoes por recozimento, em `nucleos` threads (0 = metade), e roteia
  * cada uma; fica a que fechar mais ligacoes (empate: menos via, depois menos
  * fio). Para no primeiro candidato que fechar TUDO, ou em `segundos`, ou em
  * `candidatos` (0 = sem teto). O candidato zero e a posicao de entrada intocada,

@@ -30,7 +30,8 @@ def principal(caminho: str) -> int:
     board = pcbnew.LoadBoard(caminho)
 
     p = leitor.ler(board)
-    regras.borda = p.borda          # a folga de borda e do projeto, nao nossa
+    regras.do_projeto(p)            # folga de borda e entre redes: o projeto manda
+    print("folga entre redes %.2f mm, cobre-borda %.2f mm" % (regras.folga, regras.borda))
     antes = len(p.trilhas), len(p.vias)
     # roteia do zero: o que estava la e descartado do modelo
     p.trilhas, p.vias = [], []

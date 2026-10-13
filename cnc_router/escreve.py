@@ -34,6 +34,21 @@ def limpa(board, so_das_redes=None) -> int:
     return len(fora)
 
 
+def pecas_que_mudam(board, placa) -> list:
+    """Referencias das pecas que `move_pecas` vai mexer - para a confirmacao
+    dizer o que vai acontecer antes de acontecer."""
+    por_ref = {p.ref: p for p in placa.pecas}
+    mudam = []
+    for fp in board.GetFootprints():
+        p = por_ref.get(fp.GetReference())
+        if p is None or fp.IsLocked():
+            continue
+        if (fp.GetPosition() != pcbnew.VECTOR2I(_nm(p.x), _nm(p.y))
+                or abs(fp.GetOrientationDegrees() - p.giro) > 1e-6):
+            mudam.append(p.ref)
+    return mudam
+
+
 def move_pecas(board, placa) -> int:
     """Leva para o board a posicao e o giro que o posicionador escolheu.
 

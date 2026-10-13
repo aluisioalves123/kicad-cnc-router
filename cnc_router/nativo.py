@@ -11,7 +11,7 @@ from __future__ import annotations
 import ctypes
 import os
 
-ABI_ESPERADA = 6
+ABI_ESPERADA = 7
 
 CIRCULO, CAPSULA, RETANGULO, POLIGONO, FORA_DE, SEGMENTO = 0, 1, 2, 3, 4, 5
 CIMA, BAIXO, AMBAS = 1, 2, 3
@@ -85,7 +85,7 @@ class PbPlacar(ctypes.Structure):
                 ("vias", ctypes.c_int), ("fio", ctypes.c_double),
                 ("vencedor", ctypes.c_int), ("descartados", ctypes.c_int),
                 ("julgados", ctypes.c_int), ("nucleos", ctypes.c_int),
-                ("segundos", ctypes.c_double)]
+                ("segundos", ctypes.c_double), ("parar", ctypes.c_int)]
 
 
 class NucleoAusente(RuntimeError):

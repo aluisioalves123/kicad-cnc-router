@@ -152,6 +152,36 @@ static int casco_convexo(double *p, int n, double *sai)
     return k - 1;       /* o ultimo repete o primeiro */
 }
 
+/* Vao minimo entre corpos, metade em cada um. A sobreposicao e medida por AREA,
+ * e courtyard so encostado tem area zero - mas o KiCad acusa encostado como
+ * courtyards_overlap: foi o que pegou D1 e J1 lado a lado na mesma coordenada.
+ * Pequeno de proposito: a placa feita a mao tem R3 e R4 a 0,01 mm, e o DRC
+ * aceita. */
+#define VAO_CORPO 0.005
+
+/* Afasta cada aresta do poligono convexo `d` mm para fora (canto em esquadria):
+ * para convexo, e o deslocamento exato do contorno. */
+static void infla(double *p, int n, double d)
+{
+    double t[MAX_CASCO * 2], s = area_com_sinal(p, n) >= 0 ? 1.0 : -1.0;
+    int i;
+    if (n < 3) return;
+    for (i = 0; i < n; i++) {
+        const double *a = &p[((i + n - 1) % n) * 2], *b = &p[i * 2], *c = &p[((i + 1) % n) * 2];
+        double e1x = b[0] - a[0], e1y = b[1] - a[1], e2x = c[0] - b[0], e2y = c[1] - b[1];
+        double l1 = hypot(e1x, e1y), l2 = hypot(e2x, e2y), n1x, n1y, n2x, n2y, k;
+        if (l1 < 1e-12 || l2 < 1e-12) { t[i * 2] = b[0]; t[i * 2 + 1] = b[1]; continue; }
+        /* normal para fora: (dy, -dx) no sentido anti-horario do Y para cima */
+        n1x = s * e1y / l1; n1y = -s * e1x / l1;
+        n2x = s * e2y / l2; n2y = -s * e2x / l2;
+        k = 1.0 + n1x * n2x + n1y * n2y;
+        if (k < 0.1) k = 0.1;
+        t[i * 2] = b[0] + d * (n1x + n2x) / k;
+        t[i * 2 + 1] = b[1] + d * (n1y + n2y) / k;
+    }
+    memcpy(p, t, (size_t)n * 2 * sizeof(double));
+}
+
 /* Leva todos os cascos para o mundo e anota a caixa de cada um. Uma vez por
  * avaliacao de custo: sobreposicao, borda e area proibida leem daqui. */
 static void corpos_no_mundo(const Ctx *c)
@@ -164,9 +194,12 @@ static void corpos_no_mundo(const Ctx *c)
         double a = -p->giro * M_PI / 180.0, ca = cos(a), sa = sin(a);   /* local -> mundo */
         bx[0] = bx[1] = 1e300; bx[2] = bx[3] = -1e300;
         for (k = 0; k < c->n_casco[i]; k++) {
-            double x = p->x + l[k * 2] * ca - l[k * 2 + 1] * sa;
-            double y = p->y + l[k * 2] * sa + l[k * 2 + 1] * ca;
-            w[k * 2] = x; w[k * 2 + 1] = y;
+            w[k * 2] = p->x + l[k * 2] * ca - l[k * 2 + 1] * sa;
+            w[k * 2 + 1] = p->y + l[k * 2] * sa + l[k * 2 + 1] * ca;
+        }
+        infla(w, c->n_casco[i], VAO_CORPO / 2.0);
+        for (k = 0; k < c->n_casco[i]; k++) {
+            double x = w[k * 2], y = w[k * 2 + 1];
             if (x < bx[0]) bx[0] = x;
             if (y < bx[1]) bx[1] = y;
             if (x > bx[2]) bx[2] = x;
@@ -669,11 +702,12 @@ typedef struct {
     PbPeca *pose_vencedora;
     double *peso;                /* por rede: quem nao fecha pesa mais no custo */
     int descartados, julgados;
+    PbPlacar *placar;            /* publicado ao vivo; `parar` vem de quem chamou */
 } Sorteio;
 
 static int sorteio_continua(const Sorteio *g)
 {
-    if (g->acabou) return 0;
+    if (g->acabou || g->placar->parar) return 0;
     if (g->max_candidatos > 0 && g->proximo > g->max_candidatos) return 0;
     if (g->prazo > 0 && agora() > g->prazo) return 0;
     return 1;
@@ -714,6 +748,7 @@ static void trabalha(void *arg)
         if (!legal(&c)) {
             tranca(&g->trava);
             g->descartados++;
+            g->placar->descartados = g->descartados;
             destranca(&g->trava);
             continue;
         }
@@ -739,6 +774,11 @@ static void trabalha(void *arg)
             memcpy(g->pose_vencedora, pecas, (size_t)c.n_pecas * sizeof(PbPeca));
         }
         if (g->melhor_ab == 0) g->acabou = 1;
+        /* placar ao vivo: a janela do KiCad le enquanto o sorteio corre */
+        g->placar->julgados = g->julgados;
+        g->placar->abertas_depois = g->melhor_ab;
+        g->placar->vias = g->melhor_vias;
+        g->placar->vencedor = g->vencedor;
         destranca(&g->trava);
     }
 
@@ -847,12 +887,17 @@ int pb_posiciona(const PbRegras *r,
                         &g.melhor_vias, &g.melhor_fio, falhas);
     for (i = 0; i < c->n_redes; i++)
         if (falhas[i]) g.peso[i] += PESO_POR_FALHA * falhas[i];
-    placar->abertas_antes = g.melhor_ab;
+    g.placar = placar;
+    placar->abertas_antes = placar->abertas_depois = g.melhor_ab;
+    placar->vias = g.melhor_vias;
+    placar->julgados = placar->descartados = placar->vencedor = 0;
     g.vencedor = 0;
     g.proximo = 1;
     g.acabou = (g.melhor_ab == 0);
 
-    if (nucleos <= 0) nucleos = nucleos_da_maquina();
+    /* Padrao: METADE dos nucleos. Com todos, o computador inteiro trava enquanto
+     * o sorteio roda - e quem esta usando o KiCad precisa da maquina. */
+    if (nucleos <= 0) nucleos = nucleos_da_maquina() / 2;
     if (nucleos < 1) nucleos = 1;
     fios = (Fio *)malloc((size_t)nucleos * sizeof(Fio));
     trava_cria(&g.trava);
