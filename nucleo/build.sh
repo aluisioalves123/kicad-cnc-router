@@ -7,5 +7,5 @@ case "$(uname -s 2>/dev/null || echo Windows)" in
   MINGW*|MSYS*|CYGWIN*|Windows) alvo=perfcnc.dll; extra="" ;;
   *)                            alvo=perfcnc.so;  extra="-fPIC" ;;
 esac
-gcc -O2 -Wall -Wextra -std=c99 -shared $extra -o "$alvo" grade.c roteador.c -lm
+gcc -O2 -Wall -Wextra -std=c99 -shared $extra -o "$alvo" grade.c roteador.c projeto.c -lm
 echo "compilado: $alvo"

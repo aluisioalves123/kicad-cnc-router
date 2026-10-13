@@ -39,6 +39,24 @@ class PbForma(ctypes.Structure):
     ]
 
 
+class PbAlvo(ctypes.Structure):
+    _fields_ = [("rede", ctypes.c_int), ("c", ctypes.c_int), ("l", ctypes.c_int)]
+
+
+class PbSeg(ctypes.Structure):
+    _fields_ = [("c1", ctypes.c_int), ("l1", ctypes.c_int),
+                ("c2", ctypes.c_int), ("l2", ctypes.c_int),
+                ("face", ctypes.c_int), ("rede", ctypes.c_int)]
+
+
+class PbViaOut(ctypes.Structure):
+    _fields_ = [("c", ctypes.c_int), ("l", ctypes.c_int), ("rede", ctypes.c_int)]
+
+
+class PbAberta(ctypes.Structure):
+    _fields_ = [("rede", ctypes.c_int), ("c", ctypes.c_int), ("l", ctypes.c_int)]
+
+
 class NucleoAusente(RuntimeError):
     pass
 
@@ -83,6 +101,12 @@ def _assina(lib):
     for nome in ("pb_x_de", "pb_y_de"):
         getattr(lib, nome).restype = ctypes.c_double
         getattr(lib, nome).argtypes = [ctypes.c_void_p, ctypes.c_int]
+    lib.pb_roteia_tudo.restype = ctypes.c_int
+    lib.pb_roteia_tudo.argtypes = [ctypes.c_void_p, P(PbAlvo), ctypes.c_int,
+                                   P(PbSeg), ctypes.c_int,
+                                   P(PbViaOut), ctypes.c_int,
+                                   P(PbAberta), ctypes.c_int,
+                                   P(ctypes.c_int), P(ctypes.c_int), P(ctypes.c_int)]
     lib.pb_roteia.restype = ctypes.c_int
     lib.pb_roteia.argtypes = [ctypes.c_void_p, ctypes.c_int,
                               P(ctypes.c_int), ctypes.c_int,
@@ -161,6 +185,26 @@ class Mapa:
             return None
         return [(saida[i * 4], saida[i * 4 + 1], saida[i * 4 + 2], saida[i * 4 + 3])
                 for i in range(n)]
+
+    def roteia_tudo(self, alvos, max_segs=20000, max_vias=4000, max_abertas=2000):
+        """Roteia a placa inteira no C. `alvos` = [(rede, coluna, linha)]."""
+        va = (PbAlvo * len(alvos))(*[PbAlvo(rede=r, c=c, l=l) for r, c, l in alvos])
+        segs = (PbSeg * max_segs)()
+        vias = (PbViaOut * max_vias)()
+        abertas = (PbAberta * max_abertas)()
+        ns, nv, na = ctypes.c_int(), ctypes.c_int(), ctypes.c_int()
+        ligadas = self._lib.pb_roteia_tudo(
+            self._p, va, len(alvos), segs, max_segs, vias, max_vias,
+            abertas, max_abertas,
+            ctypes.byref(ns), ctypes.byref(nv), ctypes.byref(na))
+        return {
+            "ligadas": ligadas,
+            "trilhas": [(segs[i].c1, segs[i].l1, segs[i].c2, segs[i].l2,
+                         segs[i].face, segs[i].rede) for i in range(ns.value)],
+            "vias": [(vias[i].c, vias[i].l, vias[i].rede) for i in range(nv.value)],
+            "abertas": [(abertas[i].rede, abertas[i].c, abertas[i].l)
+                        for i in range(na.value)],
+        }
 
     def __del__(self):
         if getattr(self, "_vivo", False):

@@ -76,6 +76,13 @@ typedef struct {
 
 typedef struct PbMapa PbMapa;
 
+/* Celula de chegada de um pad: sempre na face de baixo, que e a regra do projeto. */
+typedef struct { int rede; int c, l; } PbAlvo;
+
+typedef struct { int c1, l1, c2, l2, face, rede; } PbSeg;
+typedef struct { int c, l, rede; } PbViaOut;
+typedef struct { int rede, c, l; } PbAberta;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -104,6 +111,14 @@ PB_EXPORT double pb_y_de(const PbMapa *m, int linha);
  * (coluna, linha, face, direcao_de_chegada). Devolve quantos passos escreveu, ou
  * -1 se nao achou caminho, ou -2 se a saida era pequena demais.
  */
+/* Roteia a placa inteira. Devolve quantas ligacoes fechou; as que nao fecharam
+ * saem em `abertas`. */
+PB_EXPORT int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
+                             PbSeg *segs, int max_segs,
+                             PbViaOut *vias, int max_vias,
+                             PbAberta *abertas, int max_abertas,
+                             int *n_segs, int *n_vias, int *n_abertas);
+
 PB_EXPORT int pb_roteia(PbMapa *m, int rede,
                         const int *origens, int n_origens,
                         const int *alvos, int n_alvos,
