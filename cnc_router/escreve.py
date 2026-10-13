@@ -34,6 +34,28 @@ def limpa(board, so_das_redes=None) -> int:
     return len(fora)
 
 
+def move_pecas(board, placa) -> int:
+    """Leva para o board a posicao e o giro que o posicionador escolheu.
+
+    Faltava inteiro: o posicionador mexia no modelo e o resultado morria ali - o
+    arquivo gravado tinha trilha nova com as pecas no lugar antigo. Peca travada
+    nunca e tocada, nem que o modelo diga outra coisa: o cadeado do KiCad manda.
+    """
+    por_ref = {p.ref: p for p in placa.pecas}
+    movidas = 0
+    for fp in board.GetFootprints():
+        p = por_ref.get(fp.GetReference())
+        if p is None or fp.IsLocked():
+            continue
+        nova = pcbnew.VECTOR2I(_nm(p.x), _nm(p.y))
+        if (fp.GetPosition() != nova
+                or abs(fp.GetOrientationDegrees() - p.giro) > 1e-6):
+            fp.SetPosition(nova)
+            fp.SetOrientationDegrees(p.giro)
+            movidas += 1
+    return movidas
+
+
 def escreve(board, resultado, regras) -> dict:
     """Cria no board as trilhas e vias do resultado."""
     largura = _nm(regras.trilha)

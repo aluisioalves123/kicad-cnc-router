@@ -11,7 +11,7 @@ from __future__ import annotations
 import ctypes
 import os
 
-ABI_ESPERADA = 1
+ABI_ESPERADA = 2
 
 CIRCULO, CAPSULA, RETANGULO, POLIGONO, FORA_DE, SEGMENTO = 0, 1, 2, 3, 4, 5
 CIMA, BAIXO, AMBAS = 1, 2, 3
@@ -55,6 +55,31 @@ class PbViaOut(ctypes.Structure):
 
 class PbAberta(ctypes.Structure):
     _fields_ = [("rede", ctypes.c_int), ("c", ctypes.c_int), ("l", ctypes.c_int)]
+
+
+class PbPeca(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double),
+                ("giro", ctypes.c_double), ("larg", ctypes.c_double),
+                ("alt", ctypes.c_double), ("movel", ctypes.c_int)]
+
+
+class PbPadC(ctypes.Structure):
+    _fields_ = [("peca", ctypes.c_int), ("rede", ctypes.c_int),
+                ("forma", ctypes.c_int),
+                ("dx", ctypes.c_double), ("dy", ctypes.c_double),
+                ("giro_local", ctypes.c_double),
+                ("larg", ctypes.c_double), ("alt", ctypes.c_double)]
+
+
+class PbProibida(ctypes.Structure):
+    _fields_ = [("faces_trilha", ctypes.c_int), ("sem_footprint", ctypes.c_int),
+                ("n_pontos", ctypes.c_int), ("pontos", ctypes.POINTER(ctypes.c_double))]
+
+
+class PbPlacar(ctypes.Structure):
+    _fields_ = [("abertas_antes", ctypes.c_int), ("abertas_depois", ctypes.c_int),
+                ("vias", ctypes.c_int), ("fio", ctypes.c_double),
+                ("vencedor", ctypes.c_int)]
 
 
 class NucleoAusente(RuntimeError):
@@ -107,6 +132,15 @@ def _assina(lib):
                                    P(PbViaOut), ctypes.c_int,
                                    P(PbAberta), ctypes.c_int,
                                    P(ctypes.c_int), P(ctypes.c_int), P(ctypes.c_int)]
+    lib.pb_posiciona.restype = ctypes.c_int
+    lib.pb_posiciona.argtypes = [P(PbRegras), ctypes.c_double, ctypes.c_double,
+                                 ctypes.c_double, ctypes.c_double,
+                                 P(ctypes.c_double), ctypes.c_int,
+                                 P(PbProibida), ctypes.c_int,
+                                 P(PbPeca), ctypes.c_int,
+                                 P(PbPadC), ctypes.c_int,
+                                 ctypes.c_int, ctypes.c_int, ctypes.c_ulonglong,
+                                 P(PbPlacar)]
     lib.pb_roteia.restype = ctypes.c_int
     lib.pb_roteia.argtypes = [ctypes.c_void_p, ctypes.c_int,
                               P(ctypes.c_int), ctypes.c_int,

@@ -21,7 +21,7 @@ import pcbnew  # noqa: E402
 from cnc_router import escreve as escritor  # noqa: E402
 from cnc_router import placa as leitor  # noqa: E402
 from cnc_router.confere import confere  # noqa: E402
-from cnc_router.projeto import Projeto  # noqa: E402
+from cnc_router import motor  # noqa: E402
 from cnc_router.regras import Regras  # noqa: E402
 
 
@@ -35,13 +35,14 @@ def principal(caminho: str) -> int:
     p.trilhas, p.vias = [], []
 
     t0 = time.time()
-    projeto = Projeto(p, regras)
-    print("mapa pronto em %.1fs" % (time.time() - t0))
+    placar = motor.posiciona(p, regras)
+    print("posicionado em %.1fs: abertas %d -> %d (candidato %d)"
+          % (time.time() - t0, placar.abertas_antes, placar.abertas_depois,
+             placar.vencedor))
 
     t0 = time.time()
-    res = projeto.roteia_tudo(
-        lambda i, n, nome: print("  [%2d/%2d] %s" % (i + 1, n, nome)))
-    print("roteado em %.1fs" % (time.time() - t0))
+    res = motor.roteia(p, regras)
+    print("roteado em %.2fs" % (time.time() - t0))
 
     print()
     print("RESULTADO")
@@ -52,8 +53,8 @@ def principal(caminho: str) -> int:
           % dict(collections.Counter(t[4] for t in res.trilhas)))
     if res.abertas:
         print("  NAO fecharam ...... %d" % len(res.abertas))
-        for rede, a, b in res.abertas:
-            print("     %s: %s -> %s" % (rede, a, b))
+        for rede, pad in res.abertas:
+            print("     %s: falta chegar em %s" % (rede, pad))
 
     print()
     print("CONFERENCIA (medida em mm, sem olhar a grade)")
@@ -63,6 +64,7 @@ def principal(caminho: str) -> int:
     if not problemas:
         print("  nenhum problema")
 
+    movidas = escritor.move_pecas(board, p)
     tirou = escritor.limpa(board)
     criou = escritor.escreve(board, res, regras)
     saida = caminho.replace(".kicad_pcb", "-roteado.kicad_pcb")
@@ -70,8 +72,8 @@ def principal(caminho: str) -> int:
 
     print()
     print("GRAVADO")
-    print("  tirou %d trilha(s)/via(s) antigas, criou %d trilhas e %d vias"
-          % (tirou, criou["trilhas"], criou["vias"]))
+    print("  moveu %d peca(s); tirou %d trilha(s)/via(s) antigas, criou %d trilhas e %d vias"
+          % (movidas, tirou, criou["trilhas"], criou["vias"]))
     print("  %s" % saida)
     return 1 if problemas else 0
 

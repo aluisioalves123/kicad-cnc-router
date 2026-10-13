@@ -28,7 +28,7 @@
  * "15 pinos soltos" em toda configuracao. Demorei a desconfiar justamente porque
  * parecia certo. Binario incompativel tem de falhar na cara, nao mentir baixinho.
  */
-#define PB_ABI 1
+#define PB_ABI 2   /* 2: posicionador (PbPeca, PbPadC, PbProibida, PbPlacar) */
 
 /* ------------------------------------------------------------------ formas */
 #define PB_CIRCULO    0
@@ -83,6 +83,41 @@ typedef struct { int c1, l1, c2, l2, face, rede; } PbSeg;
 typedef struct { int c, l, rede; } PbViaOut;
 typedef struct { int rede, c, l; } PbAberta;
 
+/* Uma peca para o posicionador. `movel` = 0 para travada (cadeado do KiCad) e
+ * para mecanica (furo de fixacao: sem rede, nao entra em roteamento, e mudar o
+ * lugar dele muda onde a placa parafusa). */
+typedef struct {
+    double x, y, giro;
+    double larg, alt;
+    int movel;
+} PbPeca;
+
+/* Pad no referencial da PECA, antes do giro dela. */
+typedef struct {
+    int peca;
+    int rede;
+    int forma;           /* PB_CIRCULO / PB_CAPSULA / PB_RETANGULO */
+    double dx, dy, giro_local;
+    double larg, alt;
+} PbPadC;
+
+/* Area de regra do KiCad. As proibicoes sao independentes: ha area que barra so
+ * via, ou so footprint. */
+typedef struct {
+    int faces_trilha;    /* PB_CIMA|PB_BAIXO onde barra trilha; 0 = nao barra */
+    int sem_footprint;
+    int n_pontos;
+    const double *pontos;
+} PbProibida;
+
+typedef struct {
+    int abertas_antes;   /* da posicao de entrada */
+    int abertas_depois;
+    int vias;
+    double fio;          /* mm */
+    int vencedor;        /* 0 = a posicao de entrada continuou sendo a melhor */
+} PbPlacar;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -118,6 +153,21 @@ PB_EXPORT int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
                              PbViaOut *vias, int max_vias,
                              PbAberta *abertas, int max_abertas,
                              int *n_segs, int *n_vias, int *n_abertas);
+
+/* Procura posicao para as pecas moveis e deixa o ROTEADOR escolher.
+ *
+ * Gera `candidatos` posicoes por recozimento e roteia cada uma; fica a que fechar
+ * mais ligacoes (empate: menos via, depois menos fio). O candidato zero e a
+ * posicao de entrada intocada, entao o resultado nunca sai pior que ela. A
+ * vencedora volta escrita em `pecas`. */
+PB_EXPORT int pb_posiciona(const PbRegras *regras,
+                           double x0, double y0, double largura, double altura,
+                           const double *contorno, int n_contorno,
+                           const PbProibida *proibidas, int n_proibidas,
+                           PbPeca *pecas, int n_pecas,
+                           const PbPadC *pads, int n_pads,
+                           int candidatos, int passos, unsigned long long semente,
+                           PbPlacar *placar);
 
 PB_EXPORT int pb_roteia(PbMapa *m, int rede,
                         const int *origens, int n_origens,

@@ -72,6 +72,9 @@ class Proibida:
     sem_via: bool
     sem_cobre: bool
     poligono: list
+    # O KiCad proibe footprint separadamente. Penalizar peca em toda area de regra
+    # erraria nas areas que barram so trilha ou so via.
+    sem_footprint: bool = False
 
 
 @dataclass
@@ -208,6 +211,7 @@ def ler(board) -> Placa:
                 sem_trilha=bool(zona.GetDoNotAllowTracks()),
                 sem_via=bool(zona.GetDoNotAllowVias()),
                 sem_cobre=bool(zona.GetDoNotAllowZoneFills()),
+                sem_footprint=bool(zona.GetDoNotAllowFootprints()),
                 poligono=[(mm(c.CPoint(k).x), mm(c.CPoint(k).y))
                           for k in range(c.PointCount())],
             ))
