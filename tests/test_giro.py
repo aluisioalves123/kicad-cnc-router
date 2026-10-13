@@ -11,7 +11,8 @@ Aqui o KiCad gira de verdade (SetOrientationDegrees) e a gente compara com o que
 a nossa formula previu. 45 graus esta na lista de proposito: em 0/90/180/270 oval
 e retangulo sao simetricos e escondem o sinal da forma do pad.
 
-Rodar com o python do KiCad:
+Rodar com o python do KiCad, apontando uma placa:
+    set PLACA_DE_TESTE=C:\\caminho\\da\\placa.kicad_pcb
     "C:\\Program Files\\KiCad\\10.0\\bin\\python.exe" -m unittest tests.test_giro
 """
 import ctypes
@@ -29,9 +30,9 @@ from cnc_router import nativo  # noqa: E402
 from cnc_router import placa as leitor  # noqa: E402
 from cnc_router.regras import Regras  # noqa: E402
 
-PLACA = os.environ.get(
-    "PLACA_DE_TESTE",
-    r"C:\Users\Aluisio\Desktop\Rino Eletronica\Projetos\blink blink\blink blink.kicad_pcb")
+# Qualquer placa com pads ovais e courtyard serve:
+#     set PLACA_DE_TESTE=C:\caminho\da\placa.kicad_pcb
+PLACA = os.environ.get("PLACA_DE_TESTE", "")
 ANGULOS = (0.0, 90.0, 180.0, 270.0, 45.0)
 F = pcbnew.ToMM
 
@@ -43,7 +44,8 @@ def local_para_mundo(x, y, giro, dx, dy):
             y + dx * math.sin(a) + dy * math.cos(a))
 
 
-@unittest.skipUnless(os.path.exists(PLACA), "placa de teste ausente")
+@unittest.skipUnless(PLACA and os.path.exists(PLACA),
+                     "defina PLACA_DE_TESTE com o caminho de um .kicad_pcb")
 class TestGiro(unittest.TestCase):
 
     def setUp(self):

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://go.kicad.org/pcm/schemas/v1#/definitions/Repository",
+  "name": "Roteador CNC (aluisioalves123)",
+  "maintainer": {
+    "name": "Aluisio Cunha",
+    "contact": {
+      "github": "https://github.com/aluisioalves123",
+      "web": "https://hardware.aluisiocunha.com.br"
+    }
+  },
+  "packages": {
+    "url": "https://raw.githubusercontent.com/aluisioalves123/kicad-cnc-router/main/pcm/packages.json",
+    "sha256": "6ef46bb80f583239269c4c57bd78d137cbef336f0146d1bf43edf5b575aba0a0",
+    "update_timestamp": 1791908134,
+    "update_time_utc": "2026-10-13 16:15:34"
+  },
+  "resources": {
+    "url": "https://github.com/aluisioalves123/kicad-cnc-router/releases/download/v1.0.0/resources.zip",
+    "sha256": "eb4382ae62aacfb4367532cd72aa20d858550110afd5c8c5ef84f106dc77f212",
+    "update_timestamp": 1791908134,
+    "update_time_utc": "2026-10-13 16:15:34"
+  }
+}

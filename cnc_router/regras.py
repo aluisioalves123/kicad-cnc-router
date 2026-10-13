@@ -9,6 +9,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# As duas faces de cobre, pelo nome que o KiCad usa.
+CIMA = "F.Cu"
+BAIXO = "B.Cu"
+
+
+class Custos:
+    """Quanto custa cada coisa para o roteador, em unidades de celula.
+
+    Nao ha ponto otimo: curva e via sao substitutos. Encarecer a curva empurra o
+    roteador para as vias e vice-versa. O que da para escolher e onde ficar nessa
+    troca, e aqui a escolha e por POUCA CURVA: a via nesta bancada e um furo com a
+    mesma broca das ilhas, rapida de fazer, enquanto cada degrau na trilha e um
+    lugar a mais para a fresa deixar rebarba.
+    """
+
+    def __init__(self, curva=6.0, via=40.0, face_de_cima=1.15):
+        self.curva = curva
+        self.via = via
+        # Andar por cima custa um pouco mais: a face de cima e o caminho de
+        # passagem, e deixa-la livre ajuda as redes que ainda vao passar por ali.
+        self.face_de_cima = face_de_cima
+
 
 @dataclass
 class Regras:

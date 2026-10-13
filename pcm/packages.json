@@ -1,0 +1,53 @@
+{
+  "packages": [
+    {
+      "name": "Roteador CNC - fresagem caseira",
+      "description": "Posiciona e roteia placas para fresar em casa: trilha a 45 graus, nada de solda do lado dos componentes, vias soldaveis e areas proibidas respeitadas.",
+      "description_full": "Posiciona as pecas e roteia a placa pensando em quem vai FRESAR e SOLDAR na bancada, nao em fabrica:\n\n- nenhuma trilha chega em pad pela face de cima: antes do pad ela desce por uma via e chega por baixo, entao toda solda e do lado da solda;\n- trilhas a 45 graus, com poucas curvas;\n- via com a mesma broca e a mesma ilha dos pads (furo comum, soldavel);\n- folgas do projeto (classe de rede e cobre-borda) e areas proibidas quaisquer;\n- pecas travadas no cadeado do KiCad nao se movem.\n\nO posicionador sorteia posicoes em paralelo e usa o proprio roteador como juiz, ate fechar a placa inteira ou acabar o tempo. Nada e aplicado sem voce ver o resultado e confirmar, e Ctrl+Z desfaz.\n\nEnglish: placement and routing for home CNC-milled PCBs - 45-degree traces, no top-side pad connections (a via drops the trace to the bottom before each pad), solderable vias, keepouts and project clearances respected. Core written in C. UI in Portuguese.",
+      "identifier": "com.github.aluisioalves123.cncrouter",
+      "type": "plugin",
+      "author": {
+        "name": "Aluisio Cunha",
+        "contact": {
+          "github": "https://github.com/aluisioalves123",
+          "web": "https://hardware.aluisiocunha.com.br"
+        }
+      },
+      "maintainer": {
+        "name": "Aluisio Cunha",
+        "contact": {
+          "github": "https://github.com/aluisioalves123",
+          "web": "https://hardware.aluisiocunha.com.br"
+        }
+      },
+      "license": "MIT",
+      "resources": {
+        "Homepage": "https://github.com/aluisioalves123/kicad-cnc-router"
+      },
+      "tags": [
+        "routing",
+        "autorouter",
+        "placement",
+        "cnc",
+        "milling",
+        "pcb"
+      ],
+      "versions": [
+        {
+          "version": "1.0.0",
+          "status": "stable",
+          "kicad_version": "10.0",
+          "runtime": "swig",
+          "platforms": [
+            "windows",
+            "linux"
+          ],
+          "download_url": "https://github.com/aluisioalves123/kicad-cnc-router/releases/download/v1.0.0/com_github_aluisioalves123_cncrouter-1.0.0.zip",
+          "download_sha256": "828642921f94687755a9c50a1c8d45335d805698e66f8de1892ec2fcd336c8ed",
+          "download_size": 113396,
+          "install_size": 283671
+        }
+      ]
+    }
+  ]
+}

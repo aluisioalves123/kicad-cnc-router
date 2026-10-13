@@ -24,9 +24,13 @@ class RoteadorCNC(pcbnew.ActionPlugin):
         self.show_toolbar_button = True
         # So aponta o icone se ele existir de verdade: caminho quebrado aqui vira
         # erro na barra de ferramentas do KiCad, e o plugin some sem explicar.
-        icone = os.path.join(os.path.dirname(__file__), "icone.png")
+        pasta = os.path.dirname(__file__)
+        icone = os.path.join(pasta, "icone.png")
         if os.path.exists(icone):
             self.icon_file_name = icone
+        escuro = os.path.join(pasta, "icone_escuro.png")
+        if os.path.exists(escuro):
+            self.dark_icon_file_name = escuro
 
     def Run(self):
         try:

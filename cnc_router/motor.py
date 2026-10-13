@@ -10,7 +10,7 @@ from __future__ import annotations
 import ctypes
 
 from . import nativo
-from .roteador import Custos
+from .regras import Custos
 
 FORMA = {"circulo": nativo.CIRCULO, "oval": nativo.CAPSULA}
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pcbnew
 
-from .grade import BAIXO, CIMA
+from .regras import BAIXO, CIMA
 
 
 def _nm(mm: float):

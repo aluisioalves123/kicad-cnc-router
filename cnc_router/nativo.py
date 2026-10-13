@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 
 ABI_ESPERADA = 7
 
@@ -95,7 +96,15 @@ class NucleoAusente(RuntimeError):
 def _carrega():
     pasta = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                          "nucleo")
-    for nome in ("perfcnc.dll", "perfcnc.so", "libperfcnc.so"):
+    # So o binario DESTE sistema: o pacote leva o .dll e o .so juntos, e tentar
+    # carregar o .dll no Linux derruba o plugin com OSError em vez de achar o .so.
+    if sys.platform.startswith("win"):
+        nomes = ("perfcnc.dll",)
+    elif sys.platform == "darwin":
+        nomes = ("perfcnc.dylib", "perfcnc.so")
+    else:
+        nomes = ("perfcnc.so", "libperfcnc.so")
+    for nome in nomes:
         caminho = os.path.join(pasta, nome)
         if not os.path.exists(caminho):
             continue
@@ -111,7 +120,8 @@ def _carrega():
                 % (caminho, achada, ABI_ESPERADA))
         _assina(lib)
         return lib
-    raise NucleoAusente("nucleo nao compilado: rode nucleo/build.sh")
+    raise NucleoAusente("nucleo nao compilado para este sistema (%s): rode nucleo/build.sh"
+                        % sys.platform)
 
 
 def _assina(lib):

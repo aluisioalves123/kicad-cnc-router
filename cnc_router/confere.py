@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 
-from .grade import CIMA
+from .regras import CIMA
 
 
 def _dist_segmentos(a, b) -> float:
