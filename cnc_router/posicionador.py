@@ -25,6 +25,19 @@ import random
 
 GIROS = (0.0, 90.0, 180.0, 270.0)
 
+
+def _dentro(x, y, pontos) -> bool:
+    """Ponto dentro do poligono, por contagem de cruzamentos."""
+    dentro = False
+    n = len(pontos)
+    for i in range(n):
+        x1, y1 = pontos[i]
+        x2, y2 = pontos[(i + 1) % n]
+        if (y1 > y) != (y2 > y):
+            if x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+                dentro = not dentro
+    return dentro
+
 # Pesos. Sobreposicao e fuga do contorno sao proibicao, nao preferencia: o peso e
 # alto de proposito, varias ordens acima do comprimento.
 W_SOBREPOE = 500.0
@@ -39,7 +52,14 @@ class Posicionador:
         self.placa = placa
         self.regras = regras
         self.rnd = random.Random(semente)
-        self.moveis = [p for p in placa.pecas if not p.travada]
+        # Peca MECANICA nao se move. Furo de fixacao nao tem rede, nao entra em
+        # roteamento nenhum, e mudar o lugar dele muda onde a placa parafusa - na
+        # blink blink eu estava passeando com o H1 e o H2 pela placa.
+        com_rede = {pad.dono for pad in placa.pads if pad.rede}
+        self.mecanicas = {p.ref for p in placa.pecas if p.ref not in com_rede}
+        self.moveis = [p for p in placa.pecas
+                       if not p.travada and p.ref not in self.mecanicas]
+        self.pode_mover = {p.ref for p in self.moveis}
         self.pads_da_peca = {}
         for pad in placa.pads:
             self.pads_da_peca.setdefault(pad.dono, []).append(pad)
@@ -109,12 +129,27 @@ class Posicionador:
         return W_ESPALHA * sum((a - media) ** 2 for a in area) / len(area)
 
     def _sobreposicao(self) -> float:
-        """Area de peca sobre peca. Conta a folga: duas pecas coladas nao montam."""
-        folga = self.regras.folga
+        """Area de peca sobre peca.
+
+        SEM a folga de cobre. Ela vale entre trilhas de redes diferentes, nao entre
+        corpos: duas pecas podem encostar sem problema nenhum. Somando a folga
+        aqui, a placa que o usuario montou e que funciona acusava 63,6 mm2 de
+        sobreposicao inexistente.
+        """
+        folga = 0.0
         total = 0.0
-        caixas = [self.caixa(p) for p in self.placa.pecas]
+        # So conta par em que ao menos UMA das pecas pode se mexer. Sobreposicao
+        # entre duas pecas presas e constante: o otimizador nao pode melhora-la, e
+        # somar constante grande ao custo distorce a temperatura do recozimento,
+        # que e calculada a partir dele.
+        pecas = [p for p in self.placa.pecas]
+        caixas = [self.caixa(p) for p in pecas]
         for i, a in enumerate(caixas):
-            for b in caixas[i + 1:]:
+            for k in range(i + 1, len(caixas)):
+                b = caixas[k]
+                if (pecas[i].ref not in self.pode_mover
+                        and pecas[k].ref not in self.pode_mover):
+                    continue
                 dx = min(a[2], b[2]) - max(a[0], b[0]) + folga
                 dy = min(a[3], b[3]) - max(a[1], b[1]) + folga
                 if dx > 0 and dy > 0:
@@ -135,24 +170,37 @@ class Posicionador:
         ys = [p[1] for p in self.placa.contorno]
         bx0, by0, bx1, by1 = min(xs), min(ys), max(xs), max(ys)
         total = 0.0
-        for peca in self.placa.pecas:
+        for peca in self.moveis:
             x0, y0, x1, y1 = self.caixa(peca)
             total += (max(0.0, bx0 - x0) + max(0.0, x1 - bx1)
                       + max(0.0, by0 - y0) + max(0.0, y1 - by1))
         return total
 
     def _sobre_area_proibida(self) -> float:
+        """Area de peca sobre area proibida, medida no POLIGONO.
+
+        Medir pela caixa do poligono dobrava a conta nas areas triangulares de
+        canto desta placa - 121 mm2 de caixa para 60,5 mm2 de triangulo - e o
+        fantasma era grande o bastante para o otimizador preferir jogar peca para
+        FORA da placa a ficar perto de um canto.
+        """
         total = 0.0
+        passo = 0.5         # amostragem: fino o bastante para peca de 2 mm
         for z in self.placa.proibidas:
-            xs = [p[0] for p in z.poligono]
-            ys = [p[1] for p in z.poligono]
-            zx0, zy0, zx1, zy1 = min(xs), min(ys), max(xs), max(ys)
-            for peca in self.placa.pecas:
+            # so as que podem sair de la: o furo de fixacao fica no canto onde a
+            # area proibida esta, e isso e projeto, nao defeito
+            for peca in self.moveis:
                 x0, y0, x1, y1 = self.caixa(peca)
-                dx = min(x1, zx1) - max(x0, zx0)
-                dy = min(y1, zy1) - max(y0, zy0)
-                if dx > 0 and dy > 0:
-                    total += dx * dy
+                n = 0
+                x = x0
+                while x <= x1:
+                    y = y0
+                    while y <= y1:
+                        if _dentro(x, y, z.poligono):
+                            n += 1
+                        y += passo
+                    x += passo
+                total += n * passo * passo
         return total
 
     # ------------------------------------------------------------------ busca
