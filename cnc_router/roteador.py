@@ -46,6 +46,40 @@ class Roteador:
     def __init__(self, mapa, custos: Custos = None):
         self.mapa = mapa
         self.custos = custos or Custos()
+        self._via_cabe = {}
+
+    def _cabe_via(self, c, l, rede) -> bool:
+        """A ilha inteira da via cabe aqui, nas duas faces?
+
+        A trilha e fina e o A* a trata celula a celula, mas a VIA e um disco de
+        2,5 mm. Tratar a via como um ponto - que foi o que a primeira versao fez -
+        poe duas vias de redes diferentes a 2,1 mm uma da outra, com ilha de 2,5:
+        curto. Aqui a regra e explicita: so entra via onde todo o disco da ilha,
+        mais a folga, estiver livre para esta rede.
+        """
+        chave = (c, l, rede)
+        guardado = self._via_cabe.get(chave)
+        if guardado is not None:
+            return guardado
+
+        regras = self.mapa.regras
+        raio = regras.via_ilha / 2.0 + regras.folga
+        passos = int(math.ceil(raio / regras.grade))
+        ok = True
+        for face in self.mapa.faces.values():
+            for dl in range(-passos, passos + 1):
+                for dc in range(-passos, passos + 1):
+                    if (dc * dc + dl * dl) * regras.grade ** 2 > raio * raio:
+                        continue
+                    if not face.livre_para(c + dc, l + dl, rede):
+                        ok = False
+                        break
+                if not ok:
+                    break
+            if not ok:
+                break
+        self._via_cabe[chave] = ok
+        return ok
 
     # ------------------------------------------------------------------
     def _vizinhos(self, estado, rede):
@@ -66,9 +100,10 @@ class Roteador:
                 custo += self.custos.curva * (1 if giro == 1 else 2)
             saida.append(((nc, nl, face, d), custo))
 
-        # via: troca de face no mesmo lugar. O furo precisa caber nas duas.
+        # via: troca de face no mesmo lugar. Nao basta a celula estar livre - a
+        # ilha inteira tem de caber, nas duas faces.
         outra = BAIXO if face == CIMA else CIMA
-        if self.mapa.faces[outra].livre_para(c, l, rede):
+        if self._cabe_via(c, l, rede):
             saida.append(((c, l, outra, PARADO), self.custos.via))
         return saida
 

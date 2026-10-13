@@ -90,6 +90,8 @@ class Projeto:
             segmentos, vias = em_segmentos(caminho, self.mapa)
             self._guarda(segmentos, vias, rede, res)
             self._pinta(segmentos, vias, rede)
+            # o mapa mudou: o que o roteador sabia sobre onde cabe via envelheceu
+            self.roteador._via_cabe.clear()
 
             # todo o caminho vira ponto de partida para o proximo trecho
             for (c, l, face, _d) in caminho:

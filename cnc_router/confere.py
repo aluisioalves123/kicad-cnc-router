@@ -135,4 +135,40 @@ def confere(placa, regras, resultado) -> list:
         problemas.append("%d trilha(s) perto demais de pad de outra rede; pior invade "
                          "%.3f mm (ex.: %s)" % (len(perto_pad), perto_pad[0][0], perto_pad[0][1]))
 
+    # ---------------------------------------------------------------- vias
+    # Faltava inteiro: o conferidor olhava trilha contra trilha e trilha contra
+    # pad, e nunca olhava via. Deu "nenhum problema" numa placa com duas vias de
+    # redes diferentes sobrepostas - curto que so apareceu no olho de quem ia
+    # fresar. Via e cobre como qualquer outro, e furo alem disso.
+    raio_via = regras.via_ilha / 2.0
+
+    for i, (xa, ya, ra) in enumerate([(v[0], v[1], v[2]) for v in resultado.vias]):
+        for (xb, yb, rb) in [(v[0], v[1], v[2]) for v in resultado.vias][i + 1:]:
+            d = math.hypot(xb - xa, yb - ya)
+            # mesma rede pode encostar o cobre, mas furo com furo nunca: a broca
+            # arrebenta a parede entre dois furos coladas
+            minimo = (regras.broca + regras.folga if ra == rb
+                      else 2 * raio_via + regras.folga)
+            if d < minimo - 1e-6:
+                problemas.append("duas vias a %.2f mm (minimo %.2f) - %s"
+                                 % (d, minimo,
+                                    "mesma rede" if ra == rb else "REDES DIFERENTES: curto"))
+
+    for (x, y, rede) in resultado.vias:
+        for pad in placa.pads:
+            d = math.hypot(pad.x - x, pad.y - y)
+            folga_aqui = 0.0 if pad.rede == rede else regras.folga
+            limite = _raio_rumo_a(pad, x, y) + raio_via + folga_aqui
+            if d < limite - 1e-6:
+                problemas.append("via em (%.2f,%.2f) invade o pad %s em %.2f mm"
+                                 % (x, y, pad.ref, limite - d))
+        for (x1, y1, x2, y2, face, rede_t) in resultado.trilhas:
+            if rede_t == rede:
+                continue
+            d = _dist_ponto_segmento(x, y, x1, y1, x2, y2)
+            limite = raio_via + regras.trilha / 2.0 + regras.folga
+            if d < limite - 1e-6:
+                problemas.append("via em (%.2f,%.2f) perto demais de trilha da rede %s"
+                                 % (x, y, rede_t))
+
     return problemas
