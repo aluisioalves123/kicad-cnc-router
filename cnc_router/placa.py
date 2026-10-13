@@ -32,6 +32,13 @@ class Pad:
     forma: str               # "circulo", "oval", "retangulo", "outro"
     furo: float              # 0 = SMD
     passante: bool
+    # Posicao no referencial da PECA, antes do giro dela. Sem isto, mover um
+    # footprint deixaria os pads para tras: a posicao absoluta so vale enquanto a
+    # peca nao anda.
+    dono: str = ""
+    dx: float = 0.0
+    dy: float = 0.0
+    giro_local: float = 0.0
 
     def raio_na_direcao(self, ang: float) -> float:
         """Meio-eixo do pad na direcao `ang` (radianos, global).
@@ -163,6 +170,13 @@ def ler(board) -> Placa:
         for pad in fp.Pads():
             peca.pads.append("%s.%s" % (ref, pad.GetNumber()))
             tam = pad.GetSize()
+            # offset local: desfaz o giro da peca para guardar o pad no
+            # referencial dela
+            ang = math.radians(-fp.GetOrientationDegrees())
+            ox = mm(pad.GetPosition().x) - peca.x
+            oy = mm(pad.GetPosition().y) - peca.y
+            lx = ox * math.cos(ang) - oy * math.sin(ang)
+            ly = ox * math.sin(ang) + oy * math.cos(ang)
             p.pads.append(Pad(
                 ref="%s.%s" % (ref, pad.GetNumber()),
                 rede=pad.GetNetCode(),
@@ -173,6 +187,8 @@ def ler(board) -> Placa:
                 forma=FORMAS.get(pad.GetShape(), "outro"),
                 furo=mm(pad.GetDrillSizeX()),
                 passante=pad.GetAttribute() == pcbnew.PAD_ATTRIB_PTH,
+                dono=ref, dx=lx, dy=ly,
+                giro_local=pad.GetOrientationDegrees() - fp.GetOrientationDegrees(),
             ))
 
     for zona in board.Zones():

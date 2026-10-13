@@ -43,43 +43,90 @@ class Custos:
 
 
 class Roteador:
-    def __init__(self, mapa, custos: Custos = None):
+    def __init__(self, mapa, custos: Custos = None, orcamento=400000):
         self.mapa = mapa
         self.custos = custos or Custos()
         self._via_cabe = {}
+        # Teto de nos por busca. Busca que FALHA explora o espaco inteiro, e sem
+        # teto uma ligacao impossivel custa mais que a placa toda - foi o que fez
+        # o roteamento passar de 15 s para 130 s quando as pecas sairam do lugar.
+        self.orcamento = orcamento
+        # A via so e tentada de `salto` em `salto` celulas. Nao ha perda real: via
+        # nao precisa de resolucao de 0,1 mm para ficar no lugar certo, e testar o
+        # disco dela em TODA celula expandida era o grosso do tempo.
+        self.salto_da_via = max(1, int(round(0.5 / mapa.regras.grade)))
+        raio = mapa.regras.via_ilha / 2.0 + mapa.regras.folga
+        self._raio_via_celulas = int(math.ceil(raio / mapa.regras.grade))
+        self._soma = {}
+
+    def _prepara_via(self, rede):
+        """Monta a imagem integral do que esta bloqueado para esta rede.
+
+        A ilha da via e um disco de 2,5 mm: conferir celula por celula custa ~800
+        consultas, e o A* perguntava isso em CADA celula que expandia. Era o grosso
+        do tempo - a busca passou de 15 s para mais de 100 s quando esta regra
+        entrou.
+
+        Com a imagem integral, "quantas celulas bloqueadas ha neste quadrado" sai
+        em quatro somas, e a resposta vale para a busca inteira. O quadrado e
+        ligeiramente mais severo que o disco; sobra de rigor em regra de
+        afastamento e o lado certo de errar.
+        """
+        self._soma = {}
+        for nome, g in self.mapa.faces.items():
+            cols, lins = g.colunas, g.linhas
+            cel = g.celulas
+            soma = [0] * ((cols + 1) * (lins + 1))
+            for l in range(lins):
+                linha_acima = (l) * (cols + 1)
+                linha = (l + 1) * (cols + 1)
+                base = l * cols
+                corrido = 0
+                for c in range(cols):
+                    v = cel[base + c]
+                    corrido += 0 if (v == 0 or v == rede) else 1
+                    soma[linha + c + 1] = soma[linha_acima + c + 1] + corrido
+            self._soma[nome] = (soma, cols, lins)
+
+    def _bloqueados(self, c0, l0, c1, l1, soma, cols) -> int:
+        a = soma[l0 * (cols + 1) + c0]
+        b = soma[l0 * (cols + 1) + c1 + 1]
+        d = soma[(l1 + 1) * (cols + 1) + c0]
+        e = soma[(l1 + 1) * (cols + 1) + c1 + 1]
+        return e - b - d + a
 
     def _cabe_via(self, c, l, rede) -> bool:
         """A ilha inteira da via cabe aqui, nas duas faces?
 
-        A trilha e fina e o A* a trata celula a celula, mas a VIA e um disco de
-        2,5 mm. Tratar a via como um ponto - que foi o que a primeira versao fez -
-        poe duas vias de redes diferentes a 2,1 mm uma da outra, com ilha de 2,5:
-        curto. Aqui a regra e explicita: so entra via onde todo o disco da ilha,
-        mais a folga, estiver livre para esta rede.
-        """
-        chave = (c, l, rede)
-        guardado = self._via_cabe.get(chave)
-        if guardado is not None:
-            return guardado
+        Tratar a via como um PONTO - que foi o que a primeira versao fez - poe duas
+        vias de redes diferentes a 2,1 mm uma da outra, com ilha de 2,5: curto.
 
-        regras = self.mapa.regras
-        raio = regras.via_ilha / 2.0 + regras.folga
-        passos = int(math.ceil(raio / regras.grade))
-        ok = True
-        for face in self.mapa.faces.values():
-            for dl in range(-passos, passos + 1):
-                for dc in range(-passos, passos + 1):
-                    if (dc * dc + dl * dl) * regras.grade ** 2 > raio * raio:
+        A resposta tem de ser EXATA, e a ilha e um disco. Conferir o quadrado que
+        envolve o disco e 35% mais exigente, e trocar isso por velocidade custou
+        todas as vias da placa de teste. Entao: o quadrado de dentro resolve o nao,
+        o quadrado de fora resolve o sim, e so o que sobra - pouco - paga o preco
+        do disco celula a celula.
+        """
+        fora = self._raio_via_celulas
+        dentro = int(fora / 1.4142135623730951)
+        preciso = []
+        for nome, (soma, cols, lins) in self._soma.items():
+            if c - fora < 0 or l - fora < 0 or c + fora >= cols or l + fora >= lins:
+                return False        # a ilha nao cabe nem dentro da grade
+            if self._bloqueados(c - dentro, l - dentro, c + dentro, l + dentro, soma, cols):
+                return False        # ja da para dizer nao
+            if self._bloqueados(c - fora, l - fora, c + fora, l + fora, soma, cols):
+                preciso.append(nome)    # duvida: so o disco decide
+        for nome in preciso:
+            g = self.mapa.faces[nome]
+            r2 = fora * fora
+            for dl in range(-fora, fora + 1):
+                for dc in range(-fora, fora + 1):
+                    if dc * dc + dl * dl > r2:
                         continue
-                    if not face.livre_para(c + dc, l + dl, rede):
-                        ok = False
-                        break
-                if not ok:
-                    break
-            if not ok:
-                break
-        self._via_cabe[chave] = ok
-        return ok
+                    if not g.livre_para(c + dc, l + dl, rede):
+                        return False
+        return True
 
     # ------------------------------------------------------------------
     def _vizinhos(self, estado, rede):
@@ -103,7 +150,8 @@ class Roteador:
         # via: troca de face no mesmo lugar. Nao basta a celula estar livre - a
         # ilha inteira tem de caber, nas duas faces.
         outra = BAIXO if face == CIMA else CIMA
-        if self._cabe_via(c, l, rede):
+        if (c % self.salto_da_via == 0 and l % self.salto_da_via == 0
+                and self._cabe_via(c, l, rede)):
             saida.append(((c, l, outra, PARADO), self.custos.via))
         return saida
 
@@ -118,6 +166,8 @@ class Roteador:
         alvos = set(destinos)
         if not alvos or not origens:
             return None
+        # uma vez por busca, nao uma vez por celula
+        self._prepara_via(rede)
 
         fila = []
         melhor = {}
@@ -127,7 +177,11 @@ class Roteador:
             heapq.heappush(fila, (self._estimativa(c, l, alvos), 0.0, est, None))
 
         veio_de = {}
+        gastos = 0
         while fila:
+            gastos += 1
+            if gastos > self.orcamento:
+                return None
             _f, g, est, pai = heapq.heappop(fila)
             if est in veio_de:
                 continue
