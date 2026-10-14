@@ -39,6 +39,8 @@ class Janela(wx.Dialog):
         self.prazo = 0.0
         self.resultado = None       # (placa, res, problemas) pronto para aplicar
         self.mudam, self.existentes = [], 0
+        self.parando = False
+        self.fase = ""
         self.abertas_hoje = 0
 
         painel = wx.Panel(self)
@@ -128,6 +130,8 @@ class Janela(wx.Dialog):
         segundos = float(self.s_tempo.GetValue())
         self.prazo = segundos if mover else 0.0
         self.status.SetLabel("preparando...")
+        self.parando = False
+        self.fase = "sorteio" if mover else "final"
         self._estado(rodando=True)
         self.thread = threading.Thread(target=self._trabalho,
                                        args=(p, mover, segundos), daemon=True)
@@ -139,6 +143,7 @@ class Janela(wx.Dialog):
             if mover:
                 motor.posiciona(p, self.regras, segundos=segundos, placar=self.placar,
                                 conectores_na_periferia=self.periferia)
+            self.fase = "final"             # daqui em diante nao ha o que parar
             res = motor.roteia(p, self.regras)
             problemas = confere(p, self.regras, res)
             wx.CallAfter(self._pronto, p, res, problemas, mover)
@@ -151,7 +156,19 @@ class Janela(wx.Dialog):
         if pl is None:
             return
         passou = time.time() - self.inicio
-        if self.prazo > 0:
+        # Parar e fase final tem de aparecer e FICAR: antes o relogio escrevia o
+        # progresso por cima do "parando..." 0,3 s depois e a barra seguia
+        # andando com o tempo - o botao parecia nao fazer nada.
+        if self.fase == "final":
+            self.b_parar.Enable(False)
+            self.barra.Pulse()
+            self.status.SetLabel("roteamento final e conferencia... %.0f s  (%d posicoes "
+                                 "roteadas no sorteio)" % (passou, pl.julgados))
+        elif self.parando:
+            self.barra.Pulse()
+            self.status.SetLabel("parando: cada nucleo termina a posicao em que esta "
+                                 "(%d posicoes roteadas ate aqui)..." % pl.julgados)
+        elif self.prazo > 0:
             self.barra.SetValue(min(1000, int(1000 * passou / self.prazo)))
             self.status.SetLabel(
                 "%.0f s de %.0f | posicoes roteadas: %d | melhor ate agora: %d "
@@ -164,9 +181,11 @@ class Janela(wx.Dialog):
             self.status.SetLabel("roteando... %.0f s" % passou)
 
     def ao_parar(self, _evento):
-        if self.placar is not None:
+        if self.placar is not None and not self.parando:
             self.placar.parar = 1
-            self.status.SetLabel("parando: cada nucleo termina a posicao em que esta...")
+            self.parando = True
+            self.b_parar.Enable(False)
+            self.ao_relogio(None)
 
     def _falhou(self, detalhe):
         self.relogio.Stop()

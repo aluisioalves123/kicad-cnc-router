@@ -12,7 +12,7 @@ import ctypes
 import os
 import sys
 
-ABI_ESPERADA = 10
+ABI_ESPERADA = 12
 
 CIRCULO, CAPSULA, RETANGULO, POLIGONO, FORA_DE, SEGMENTO = 0, 1, 2, 3, 4, 5
 CIMA, BAIXO, AMBAS = 1, 2, 3
@@ -29,6 +29,7 @@ class PbRegras(ctypes.Structure):
         ("peso_cima", ctypes.c_double),
         ("borda", ctypes.c_double),
         ("peso_plano", ctypes.c_double),
+        ("peso_estimativa", ctypes.c_double),
         ("salto_via", ctypes.c_int), ("orcamento", ctypes.c_long),
         ("tentativas", ctypes.c_int),
     ]
@@ -45,7 +46,11 @@ class PbForma(ctypes.Structure):
 
 
 class PbAlvo(ctypes.Structure):
-    _fields_ = [("rede", ctypes.c_int), ("c", ctypes.c_int), ("l", ctypes.c_int)]
+    _fields_ = [("rede", ctypes.c_int), ("c", ctypes.c_int), ("l", ctypes.c_int),
+                ("forma", ctypes.c_int),
+                ("x", ctypes.c_double), ("y", ctypes.c_double),
+                ("larg", ctypes.c_double), ("alt", ctypes.c_double),
+                ("giro", ctypes.c_double)]
 
 
 class PbSeg(ctypes.Structure):
@@ -201,6 +206,7 @@ def regras_para_c(regras, custos=None, salto_via=5, orcamento=3000000,
         peso_cima=getattr(c, "face_de_cima", 1.15),
         borda=regras.borda,
         peso_plano=getattr(c, "plano", 2.0),
+        peso_estimativa=getattr(c, "estimativa", 1.0),
         salto_via=salto_via, orcamento=orcamento, tentativas=tentativas,
     )
 
@@ -283,7 +289,11 @@ class Mapa:
 
     def roteia_tudo(self, alvos, max_segs=20000, max_vias=4000, max_abertas=2000):
         """Roteia a placa inteira no C. `alvos` = [(rede, coluna, linha)]."""
-        va = (PbAlvo * len(alvos))(*[PbAlvo(rede=r, c=c, l=l) for r, c, l in alvos])
+        # alvo = (rede, c, l) so com o centro, ou (rede, c, l, forma, x, y, larg,
+        # alt, giro) com a forma do pad: a trilha chega em qualquer ponto dele
+        va = (PbAlvo * len(alvos))(*[
+            PbAlvo(*a) if len(a) == 9 else PbAlvo(rede=a[0], c=a[1], l=a[2])
+            for a in alvos])
         segs = (PbSeg * max_segs)()
         vias = (PbViaOut * max_vias)()
         abertas = (PbAberta * max_abertas)()

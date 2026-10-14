@@ -86,6 +86,7 @@ typedef struct {
     int n_proibidas;
     const PbPlano *planos;
     int n_planos;
+    volatile int *parar;                 /* o pedido de parar do placar */
     PbPeca *pecas;
     int n_pecas;
     const PbPadC *pads;
@@ -645,11 +646,16 @@ static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
             alvos[na].rede = pad->rede;
             alvos[na].c = pb_coluna_de(m, x);
             alvos[na].l = pb_linha_de(m, y);
+            alvos[na].forma = pad->forma;
+            alvos[na].x = x; alvos[na].y = y;
+            alvos[na].larg = pad->larg; alvos[na].alt = pad->alt;
+            alvos[na].giro = giro;
             na++;
         }
     }
     pb_pinta(m, formas, nf);
     pb_define_planos(m, c->planos, c->n_planos);
+    m->parar = c->parar;
 
     segs = (PbSeg *)malloc(20000 * sizeof(PbSeg));
     vias = (PbViaOut *)malloc(4000 * sizeof(PbViaOut));
@@ -839,6 +845,7 @@ static void trabalha(void *arg)
         memset(falhas, 0, (size_t)nr * sizeof(int));
         ab = julga(&c, g->x0, g->y0, g->larg, g->alt, g->contorno, g->n_contorno,
                    &nv, &fio, falhas, &perda);
+        if (g->placar->parar) break;    /* roteamento interrompido: nao vale */
 
         tranca(&g->trava);
         g->julgados++;
@@ -899,6 +906,7 @@ int pb_posiciona(const PbRegras *r,
     c->r = r;
     c->proibidas = proibidas; c->n_proibidas = n_proibidas;
     c->planos = planos; c->n_planos = n_planos;
+    c->parar = &placar->parar;
     c->pecas = pecas; c->n_pecas = n_pecas;
     c->pads = pads; c->n_pads = n_pads;
 

@@ -142,16 +142,108 @@ static int cabe_via(PbMapa *m, int c, int l, int rede)
     return 1;
 }
 
+/* ------------------------------------------------------------------ alcance */
+
+/* Da para chegar? Varredura simples, sem custo nem direcao: as mesmas jogadas do
+ * A* (8 vizinhas livres, via onde a ilha cabe), mas cada celula visitada uma vez.
+ *
+ * Existe porque a ligacao que NAO fecha era o que mais custava: o A* varria a
+ * placa inteira - celula x face x direcao de chegada - ate esgotar o orcamento.
+ * No interfone (1048 x 838 celulas) eram 30 s por roteamento, quase tudo em
+ * ligacao impossivel. A varredura responde o "nao" em milissegundos. */
+static int alcanca(PbMapa *m, int rede, const int *origens, int n_origens)
+{
+    int cols = m->colunas, lins = m->linhas, ini = 0, fim = 0, i;
+    size_t n = (size_t)cols * lins * 2;
+    unsigned marca;
+    if (!m->bfs_visto) {
+        m->bfs_visto = (unsigned *)calloc(n, sizeof(unsigned));
+        m->bfs_fila = (int *)malloc(n * sizeof(int));
+        m->bfs_marca = 0;
+        if (!m->bfs_visto || !m->bfs_fila) {
+            free(m->bfs_visto); free(m->bfs_fila);
+            m->bfs_visto = NULL; m->bfs_fila = NULL;
+            return 1;                       /* sem memoria: deixa o A* decidir */
+        }
+    }
+    if (m->bfs_marca >= 0xFFFFFFF0u) {
+        memset(m->bfs_visto, 0, n * sizeof(unsigned));
+        m->bfs_marca = 0;
+    }
+    marca = ++m->bfs_marca;
+    for (i = 0; i < n_origens; i++) {
+        int c = origens[i * 3], l = origens[i * 3 + 1], f = origens[i * 3 + 2], e;
+        if (c < 0 || l < 0 || c >= cols || l >= lins) continue;
+        e = (l * cols + c) * 2 + f;
+        if (m->bfs_visto[e] == marca) continue;
+        m->bfs_visto[e] = marca;
+        m->bfs_fila[fim++] = e;
+    }
+    while (ini < fim) {
+        int e = m->bfs_fila[ini++], f = e % 2, cel = e / 2, c = cel % cols, l = cel / cols, d;
+        if ((ini & 0xFFFF) == 0 && m->parar && *m->parar) return 0;
+        if (m->alvo_marca[e] == m->busca) return 1;
+        for (d = 0; d < 8; d++) {
+            int nc = c + DC[d], nl = l + DL[d], v;
+            if (!pb_livre_para(m, nc, nl, f, rede)) continue;
+            v = (nl * cols + nc) * 2 + f;
+            if (m->bfs_visto[v] == marca) continue;
+            m->bfs_visto[v] = marca;
+            m->bfs_fila[fim++] = v;
+        }
+        if ((m->regras.salto_via <= 1
+                || (c % m->regras.salto_via == 0 && l % m->regras.salto_via == 0))
+                && m->bfs_visto[e ^ 1] != marca && cabe_via(m, c, l, rede)) {
+            m->bfs_visto[e ^ 1] = marca;
+            m->bfs_fila[fim++] = e ^ 1;
+        }
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ busca */
 
-static double estimativa(int c, int l, const int *alvos, int n)
+/* Estimativa ate o conjunto de alvos. Com poucos alvos, a menor distancia ate
+ * algum deles. Com muitos (as celulas de um pad inteiro), a distancia ate o
+ * centro deles menos o raio do conjunto: continua sem superestimar, e nao custa
+ * centenas de contas por passo. */
+typedef struct {
+    const int *alvos;
+    int n;
+    double cc, cl, raio;
+} Rumo;
+
+static double octil(double dc, double dl)
+{
+    double menor;
+    dc = fabs(dc); dl = fabs(dl);
+    menor = dc < dl ? dc : dl;
+    return RAIZ2 * menor + fabs(dc - dl);
+}
+
+static void prepara_rumo(Rumo *r, const int *alvos, int n)
+{
+    int i;
+    r->alvos = alvos; r->n = n; r->cc = r->cl = r->raio = 0.0;
+    if (n <= 4) return;
+    for (i = 0; i < n; i++) { r->cc += alvos[i * 3]; r->cl += alvos[i * 3 + 1]; }
+    r->cc /= n; r->cl /= n;
+    for (i = 0; i < n; i++) {
+        double d = octil(alvos[i * 3] - r->cc, alvos[i * 3 + 1] - r->cl);
+        if (d > r->raio) r->raio = d;
+    }
+}
+
+static double estimativa(int c, int l, const Rumo *r)
 {
     double melhor = 1e30;
     int i;
-    for (i = 0; i < n; i++) {
-        int dc = abs(alvos[i * 3] - c), dl = abs(alvos[i * 3 + 1] - l);
-        int menor = dc < dl ? dc : dl;
-        double d = RAIZ2 * menor + abs(dc - dl);
+    if (r->n > 4) {
+        double d = octil(c - r->cc, l - r->cl) - r->raio;
+        return d > 0 ? d : 0.0;
+    }
+    for (i = 0; i < r->n; i++) {
+        double d = octil(r->alvos[i * 3] - c, r->alvos[i * 3 + 1] - l);
         if (d < melhor) melhor = d;
     }
     return melhor;
@@ -170,9 +262,12 @@ int pb_roteia(PbMapa *m, int rede,
     Heap h = { NULL, 0, 0 };
     long gastos = 0;
     int achou = -1, i, n = 0;
+    double peso_h = m->regras.peso_estimativa;
+    Rumo rumo;
 
     if (n_origens <= 0 || n_alvos <= 0) return -1;
     prepara_via(m, rede);
+    if (peso_h < 1.0) peso_h = 1.0;
 
     if (!m->carimbo) {
         m->g = (float *)malloc(total * sizeof(float));
@@ -189,7 +284,20 @@ int pb_roteia(PbMapa *m, int rede,
         memset(m->carimbo, 0, total * sizeof(unsigned));
         m->busca = 0;
     }
+    if (!m->alvo_marca) {
+        m->alvo_marca = (unsigned *)calloc((size_t)cols * lins * 2, sizeof(unsigned));
+        if (!m->alvo_marca) return -1;
+    }
     m->busca++;
+    if (m->busca == 1)          /* carimbo zerado ou deu a volta: marca velha tambem */
+        memset(m->alvo_marca, 0, (size_t)cols * lins * 2 * sizeof(unsigned));
+    for (i = 0; i < n_alvos; i++) {
+        int c = alvos[i * 3], l = alvos[i * 3 + 1], f = alvos[i * 3 + 2];
+        if (c < 0 || l < 0 || c >= cols || l >= lins) continue;
+        m->alvo_marca[(l * cols + c) * 2 + f] = m->busca;
+    }
+    if (!alcanca(m, rede, origens, n_origens)) return -1;
+    prepara_rumo(&rumo, alvos, n_alvos);
     g = m->g; veio = m->veio; carimbo = m->carimbo;
     aberto = m->busca * 2;
     fechado = aberto + 1;
@@ -203,7 +311,7 @@ int pb_roteia(PbMapa *m, int rede,
         g[est] = 0.0f;
         veio[est] = -1;
         carimbo[est] = aberto;
-        heap_push(&h, estimativa(c, l, alvos, n_alvos), 0.0, est);
+        heap_push(&h, peso_h * estimativa(c, l, &rumo), 0.0, est);
     }
 
     for (;;) {
@@ -212,7 +320,9 @@ int pb_roteia(PbMapa *m, int rede,
         double gcur, peso;
 
         if (!heap_pop(&h, &no)) break;
-        if (m->regras.orcamento > 0 && ++gastos > m->regras.orcamento) break;
+        ++gastos;
+        if (m->regras.orcamento > 0 && gastos > m->regras.orcamento) break;
+        if ((gastos & 0xFFFF) == 0 && m->parar && *m->parar) break;
 
         est = no.estado;
         if (carimbo[est] == fechado) continue;
@@ -226,14 +336,10 @@ int pb_roteia(PbMapa *m, int rede,
         c = cel % cols;
         l = cel / cols;
 
-        for (i = 0; i < n_alvos; i++) {
-            if (alvos[i * 3] == c && alvos[i * 3 + 1] == l
-                    && alvos[i * 3 + 2] == face) {
-                achou = est;
-                break;
-            }
+        if (m->alvo_marca[(l * cols + c) * 2 + face] == m->busca) {
+            achou = est;
+            break;
         }
-        if (achou >= 0) break;
 
         peso = (face == 0) ? m->regras.peso_cima : 1.0;
         /* embaixo, dentro do plano de outra rede: cada passo corta o plano */
@@ -264,7 +370,7 @@ int pb_roteia(PbMapa *m, int rede,
                 g[prox] = (float)ng;
                 veio[prox] = est;
                 if (carimbo[prox] != fechado) carimbo[prox] = aberto;
-                heap_push(&h, ng + estimativa(nc, nl, alvos, n_alvos), ng, prox);
+                heap_push(&h, ng + peso_h * estimativa(nc, nl, &rumo), ng, prox);
             }
         }
 
@@ -282,7 +388,7 @@ int pb_roteia(PbMapa *m, int rede,
                     g[prox] = (float)ng;
                     veio[prox] = est;
                     if (carimbo[prox] != fechado) carimbo[prox] = aberto;
-                    heap_push(&h, ng + estimativa(c, l, alvos, n_alvos), ng, prox);
+                    heap_push(&h, ng + peso_h * estimativa(c, l, &rumo), ng, prox);
                 }
             }
         }

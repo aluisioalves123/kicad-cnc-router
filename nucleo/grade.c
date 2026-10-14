@@ -223,6 +223,9 @@ void pb_destroi(PbMapa *m)
     free(m->g);
     free(m->veio);
     free(m->carimbo);
+    free(m->bfs_visto);
+    free(m->bfs_fila);
+    free(m->alvo_marca);
     {
         int i;
         for (i = 0; i < m->n_planos; i++) free(m->plano_regiao[i]);
@@ -232,7 +235,16 @@ void pb_destroi(PbMapa *m)
 
 void pb_pinta(PbMapa *m, const PbForma *formas, int quantas)
 {
-    double base = m->regras.trilha / 2.0 + m->regras.folga;
+    /* A trilha anda de centro em centro de celula, e o meio de um passo na
+     * diagonal pode passar mais perto de um canto de obstaculo do que as duas
+     * pontas - que sao as que a grade confere. O pior caso e o canto vivo, a
+     * D = meia trilha + folga: o meio do passo chega a sqrt(D^2 - (passo/2)^2).
+     * A margem e essa diferenca, mais um fio: 0,003 mm em grade de 0,1 e
+     * 0,013 mm em 0,2. Meia celula, que era a margem antes, comia a folga que
+     * o pino do meio de um TO-92 tem. */
+    double d = m->regras.trilha / 2.0 + m->regras.folga, passo = m->regras.grade;
+    double margem = d - sqrt(d * d - passo * passo / 2.0) + 0.002;
+    double base = d + margem;
     int i, face;
     for (i = 0; i < quantas; i++) {
         const PbForma *f = &formas[i];

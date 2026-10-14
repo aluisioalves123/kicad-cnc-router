@@ -39,6 +39,21 @@ struct PbMapa {
     int plano_face[PB_MAX_PLANOS];
     unsigned char *plano_regiao[PB_MAX_PLANOS];
 
+    /* Varredura de alcance (ver alcanca() no roteador): carimbo por estado
+     * celula x face, como o do A*, e a fila. */
+    unsigned *bfs_visto;
+    unsigned bfs_marca;
+    int *bfs_fila;
+
+    /* Pedido de parar de quem chamou (o placar do posicionador); NULL = nunca.
+     * A busca confere de tempos em tempos e desiste. */
+    volatile int *parar;
+
+    /* Alvos da busca atual marcados na grade (celula x face), com o numero da
+     * busca: "cheguei?" vira uma consulta em vez de varrer centenas de celulas
+     * de pad a cada passo. */
+    unsigned *alvo_marca;
+
     float *g;
     int *veio;
     unsigned *carimbo;   /* 2*busca: aberto nesta busca; 2*busca+1: fechado */

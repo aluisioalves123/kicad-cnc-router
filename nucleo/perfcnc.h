@@ -28,7 +28,7 @@
  * "15 pinos soltos" em toda configuracao. Demorei a desconfiar justamente porque
  * parecia certo. Binario incompativel tem de falhar na cara, nao mentir baixinho.
  */
-#define PB_ABI 10  /* 10: plano perdido (metrica, peso no A*, juiz) */
+#define PB_ABI 12  /* 12: PbAlvo leva a forma do pad: chega em qualquer ponto dele */
 /* (o corpo agora e o courtyard - mesma struct, mesma ABI) */
 
 /* ------------------------------------------------------------------ formas */
@@ -63,6 +63,10 @@ typedef struct {
      * cada trilha ali corta o plano. Na PCB o plano inteiro vale mais que fio
      * curto. */
     double peso_plano;
+    /* A* ponderado: a estimativa vale isto vezes mais (1 = A* classico). Acima de
+     * 1 a busca vai mais direto ao alvo e explora muito menos - em placa grande e
+     * a diferenca entre segundos e minutos -, com caminho um pouco menos otimo. */
+    double peso_estimativa;
 
     int salto_via;       /* a via so e tentada de N em N celulas */
     long orcamento;      /* teto de nos por busca; 0 = sem teto */
@@ -95,8 +99,21 @@ typedef struct {
     const double *pontos;
 } PbPlano;
 
-/* Celula de chegada de um pad: sempre na face de baixo, que e a regra do projeto. */
-typedef struct { int rede; int c, l; } PbAlvo;
+/* Um pad a ligar: sempre pela face de baixo, que e a regra do projeto.
+ *
+ * Leva a FORMA do pad, e nao so o centro: a trilha pode terminar em qualquer
+ * ponto do cobre dele onde caiba. No TO-92 Inline (pinos a 1,27 mm, 0,22 mm de
+ * vao) o centro de cada pad fica a 0,75 mm do vizinho, e a trilha de 0,8 com
+ * folga 0,4 precisa de 0,8: mirando so o centro, os tres pinos eram
+ * inalcancaveis. Pela ponta do oval, cabe. larg = 0 vale so o centro. */
+typedef struct {
+    int rede;
+    int c, l;            /* celula do centro */
+    int forma;           /* PB_CIRCULO / PB_CAPSULA / PB_RETANGULO */
+    double x, y;         /* centro, mm */
+    double larg, alt;    /* mm */
+    double giro;         /* graus */
+} PbAlvo;
 
 typedef struct { int c1, l1, c2, l2, face, rede; } PbSeg;
 typedef struct { int c, l, rede; } PbViaOut;

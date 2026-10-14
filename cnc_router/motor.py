@@ -104,6 +104,8 @@ def monta_mapa(placa, regras, custos: Custos = None):
 def roteia(placa, regras, custos: Custos = None) -> Resultado:
     m = monta_mapa(placa, regras, custos)
     alvos = [(pad.rede,) + m.para_grade(pad.x, pad.y)
+             + (FORMA.get(pad.forma, nativo.RETANGULO), pad.x, pad.y,
+                pad.largura, pad.altura, pad.giro)
              for pad in placa.pads if pad.rede]
     return Resultado(m.roteia_tudo(alvos), m, placa)
 

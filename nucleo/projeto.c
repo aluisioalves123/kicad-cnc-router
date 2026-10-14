@@ -125,6 +125,52 @@ static void pinta_trecho(PbMapa *m, const PbSeg *segs, int de, int ate,
     (void)folga;
 }
 
+/* ------------------------------------------------------------------ pad */
+
+/* Celulas do cobre do pad onde a PONTA da trilha cabe (livres para a rede no
+ * mapa inflado), como triplas (coluna, linha, face de baixo). E por elas que a
+ * trilha chega - ou sai, no primeiro pad. Sem forma (larg = 0), so o centro. */
+static int celulas_do_pad(const PbMapa *m, const PbAlvo *a, int rede,
+                          int *saida, int max)
+{
+    double hx = a->larg / 2.0, hy = a->alt / 2.0, raio = hx > hy ? hx : hy;
+    double t = a->giro * M_PI / 180.0, ct = cos(t), st = sin(t);   /* mundo -> local */
+    int c0 = pb_coluna_de(m, a->x - raio), c1 = pb_coluna_de(m, a->x + raio);
+    int l0 = pb_linha_de(m, a->y - raio), l1 = pb_linha_de(m, a->y + raio);
+    int c, l, n = 0;
+    if (a->larg <= 0.0 || a->alt <= 0.0) {
+        saida[0] = a->c; saida[1] = a->l; saida[2] = 1;
+        return 1;
+    }
+    for (l = l0; l <= l1; l++)
+        for (c = c0; c <= c1 && n < max; c++) {
+            double dx = pb_x_de(m, c) - a->x, dy = pb_y_de(m, l) - a->y;
+            double lx = dx * ct - dy * st, ly = dx * st + dy * ct;
+            int dentro;
+            if (a->forma == PB_CIRCULO) {
+                dentro = lx * lx + ly * ly <= hx * hx;
+            } else if (a->forma == PB_CAPSULA) {
+                double r = hx < hy ? hx : hy, ex = hx - r, ey = hy - r;
+                double px = fabs(lx) - ex, py = fabs(ly) - ey;
+                if (px < 0) px = 0;
+                if (py < 0) py = 0;
+                dentro = px * px + py * py <= r * r;
+            } else {
+                dentro = fabs(lx) <= hx && fabs(ly) <= hy;
+            }
+            if (!dentro || !pb_livre_para(m, c, l, 1, rede)) continue;
+            saida[n * 3] = c; saida[n * 3 + 1] = l; saida[n * 3 + 2] = 1;
+            n++;
+        }
+    if (n == 0) {               /* nada cabe: o centro, e o A* responde que nao da */
+        saida[0] = a->c; saida[1] = a->l; saida[2] = 1;
+        n = 1;
+    }
+    return n;
+}
+
+#define MAX_CEL_PAD 20000
+
 /* ------------------------------------------------------------------ plano */
 
 static const int DC8[8] = { 1, 1, 0, -1, -1, -1,  0,  1 };   /* par = reto, impar = 45 */
@@ -326,6 +372,8 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
     int n_segs = 0, n_vias = 0, n_abertas = 0;
     int *pares = (int *)malloc((size_t)(n_alvos > 0 ? n_alvos : 1) * 2 * sizeof(int));
     int n_pares = 0;
+    int *celpad = (int *)malloc((size_t)MAX_CEL_PAD * 3 * sizeof(int));
+    int *celpad2 = (int *)malloc((size_t)MAX_CEL_PAD * 3 * sizeof(int));
 
     /* Pad de plano que ficou sem ligacao numa passada anterior vai PRIMEIRO, com
      * trilha ate o pad da mesma rede mais perto. Rede de plano roteia por ultimo,
@@ -335,7 +383,7 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
         Rede *r = &redes[j];
         if (plano_da_rede(m, r->rede) < 0) continue;
         for (i = 0; i < r->n; i++) {
-            int a = r->indices[i], b = -1, k, n, orig[3], dest[3];
+            int a = r->indices[i], b = -1, k, n, no, nd;
             double melhor_d = 1e30;
             if (!falhou[a]) continue;
             for (k = 0; k < r->n; k++) {
@@ -347,9 +395,9 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
                 if (d < melhor_d) { melhor_d = d; b = x; }
             }
             if (b < 0) continue;
-            orig[0] = alvos[a].c; orig[1] = alvos[a].l; orig[2] = 1;
-            dest[0] = alvos[b].c; dest[1] = alvos[b].l; dest[2] = 1;
-            n = pb_roteia(m, r->rede, orig, 1, dest, 1, caminho, max_caminho * 4);
+            no = celulas_do_pad(m, &alvos[a], r->rede, celpad, MAX_CEL_PAD);
+            nd = celulas_do_pad(m, &alvos[b], r->rede, celpad2, MAX_CEL_PAD);
+            n = pb_roteia(m, r->rede, celpad, no, celpad2, nd, caminho, max_caminho * 4);
             if (n < 0) continue;            /* fica para a fase do plano */
             {
                 int s0 = n_segs, v0 = n_vias;
@@ -366,6 +414,7 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
     for (j = 0; j < n_redes; j++) {
         Rede *r = &redes[j];
         int restantes, ip = plano_da_rede(m, r->rede);
+        if (m->parar && *m->parar) break;   /* quem chamou desistiu */
         Pedacos pd;
         if (r->n < 2) continue;
 
@@ -398,17 +447,15 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
             ligadas += entraram - 1;
         } else {
             ligado[r->indices[0]] = 1;
-            n_origens = 1;
-            origens[0] = alvos[r->indices[0]].c;
-            origens[1] = alvos[r->indices[0]].l;
-            origens[2] = 1;                 /* chegada sempre pela face de baixo */
+            /* parte de qualquer ponto do primeiro pad onde a trilha caiba */
+            n_origens = celulas_do_pad(m, &alvos[r->indices[0]], r->rede, origens,
+                                       max_caminho);
             restantes = r->n - 1;
         }
 
         while (restantes > 0) {
-            int melhor = -1, n;
+            int melhor = -1, n, n_destino;
             double melhor_d = 1e30;
-            int destino[3];
 
             /* proximo alvo: o mais perto do que ja esta ligado */
             for (i = 0; i < r->n; i++) {
@@ -424,11 +471,8 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
             }
             if (melhor < 0) break;
 
-            destino[0] = alvos[melhor].c;
-            destino[1] = alvos[melhor].l;
-            destino[2] = 1;
-
-            n = pb_roteia(m, r->rede, origens, n_origens, destino, 1,
+            n_destino = celulas_do_pad(m, &alvos[melhor], r->rede, celpad, MAX_CEL_PAD);
+            n = pb_roteia(m, r->rede, origens, n_origens, celpad, n_destino,
                           caminho, max_caminho * 4);
             if (n < 0) {
                 if (n_abertas < max_abertas) {
@@ -455,7 +499,7 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
                 /* ja perdeu para uma passada anterior: nao adianta terminar */
                 if (teto >= 0 && n_abertas > teto) {
                     if (ip >= 0) { free(pd.rotulo); free(pd.pai); }
-                    free(pares);
+                    free(pares); free(celpad); free(celpad2);
                     *n_segs_out = n_segs;
                     *n_vias_out = n_vias;
                     *n_abertas_out = n_abertas;
@@ -493,7 +537,7 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
         }
         if (ip >= 0) { free(pd.rotulo); free(pd.pai); }
     }
-    free(pares);
+    free(pares); free(celpad); free(celpad2);
 
     *n_segs_out = n_segs;
     *n_vias_out = n_vias;
@@ -627,6 +671,7 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
             memcpy(abertas, t_abertas, (size_t)na * sizeof(PbAberta));
         }
         if (na == 0) break;
+        if (m->parar && *m->parar) break;
     }
 
     /* o mapa termina com o cobre da passada que ganhou, nao com o da ultima */
