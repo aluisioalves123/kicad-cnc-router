@@ -12,10 +12,11 @@ import ctypes
 import os
 import sys
 
-ABI_ESPERADA = 7
+ABI_ESPERADA = 8
 
 CIRCULO, CAPSULA, RETANGULO, POLIGONO, FORA_DE, SEGMENTO = 0, 1, 2, 3, 4, 5
 CIMA, BAIXO, AMBAS = 1, 2, 3
+PAPEL_COMUM, PAPEL_CONECTOR, PAPEL_MECANICA = 0, 1, 2
 LIVRE, DE_NINGUEM = 0, -1
 
 
@@ -65,7 +66,8 @@ class PbPeca(ctypes.Structure):
                 ("giro", ctypes.c_double), ("larg", ctypes.c_double),
                 ("alt", ctypes.c_double), ("cx", ctypes.c_double),
                 ("cy", ctypes.c_double), ("movel", ctypes.c_int),
-                ("n_corpo", ctypes.c_int), ("corpo", ctypes.POINTER(ctypes.c_double))]
+                ("n_corpo", ctypes.c_int), ("corpo", ctypes.POINTER(ctypes.c_double)),
+                ("papel", ctypes.c_int)]
 
 
 class PbPadC(ctypes.Structure):
@@ -86,7 +88,8 @@ class PbPlacar(ctypes.Structure):
                 ("vias", ctypes.c_int), ("fio", ctypes.c_double),
                 ("vencedor", ctypes.c_int), ("descartados", ctypes.c_int),
                 ("julgados", ctypes.c_int), ("nucleos", ctypes.c_int),
-                ("segundos", ctypes.c_double), ("parar", ctypes.c_int)]
+                ("segundos", ctypes.c_double), ("parar", ctypes.c_int),
+                ("conectores_mm", ctypes.c_double)]
 
 
 class NucleoAusente(RuntimeError):

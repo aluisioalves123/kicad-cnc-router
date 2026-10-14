@@ -106,7 +106,7 @@ def roteia(placa, regras, custos: Custos = None) -> Resultado:
 
 
 def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=1,
-              nucleos=0, custos=None, placar=None):
+              nucleos=0, custos=None, placar=None, conectores_na_periferia=True):
     """Posiciona no C, com o roteador como juiz. Escreve a vencedora na placa.
 
     Sorteia em todos os nucleos ate fechar a placa inteira ou acabar `segundos`
@@ -134,7 +134,11 @@ def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=
         nativo.PbPeca(x=p.x, y=p.y, giro=p.giro, larg=p.largura, alt=p.altura,
                       cx=p.cx, cy=p.cy,
                       movel=int(not p.travada and p.ref in com_rede),
-                      n_corpo=len(p.corpo), corpo=corpos[i])
+                      n_corpo=len(p.corpo), corpo=corpos[i],
+                      papel=(nativo.PAPEL_MECANICA if p.ref not in com_rede
+                             else nativo.PAPEL_CONECTOR
+                             if conectores_na_periferia and p.conector
+                             else nativo.PAPEL_COMUM))
         for i, p in enumerate(placa.pecas)])
     pads = (nativo.PbPadC * len(placa.pads))(*[
         nativo.PbPadC(peca=indice[pad.dono], rede=pad.rede,
@@ -148,8 +152,13 @@ def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=
         contorno[i * 2], contorno[i * 2 + 1] = x, y
 
     vivos = []
-    proibidas = (nativo.PbProibida * max(1, len(placa.proibidas)))()
-    for i, z in enumerate(placa.proibidas):
+    # Area que mora num footprint MOVEL anda com ele, e o posicionador em C so
+    # conhece area parada: fica de fora do sorteio (o juiz roteia um pouco
+    # otimista ali) e volta, no lugar novo, para o roteamento final.
+    moveis = {p.ref for p in placa.pecas if not p.travada and p.ref in com_rede}
+    paradas = [z for z in placa.proibidas if z.dono not in moveis]
+    proibidas = (nativo.PbProibida * max(1, len(paradas)))()
+    for i, z in enumerate(paradas):
         pts = (ctypes.c_double * (len(z.poligono) * 2))()
         for k, (x, y) in enumerate(z.poligono):
             pts[k * 2], pts[k * 2 + 1] = x, y
@@ -168,7 +177,7 @@ def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=
                      placa.x0 - margem, placa.y0 - margem,
                      placa.largura + 2 * margem, placa.altura + 2 * margem,
                      contorno, len(placa.contorno),
-                     proibidas, len(placa.proibidas),
+                     proibidas, len(paradas),
                      pecas, len(placa.pecas), pads, len(placa.pads),
                      candidatos, passos, semente, float(segundos), nucleos,
                      ctypes.byref(placar))
@@ -184,4 +193,10 @@ def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=
         pad.x = p.x + pad.dx * math.cos(a) - pad.dy * math.sin(a)
         pad.y = p.y + pad.dx * math.sin(a) + pad.dy * math.cos(a)
         pad.giro = p.giro + pad.giro_local
+    for z in placa.proibidas:
+        if z.dono in moveis:
+            p = por_ref[z.dono]
+            a = math.radians(-p.giro)
+            z.poligono = [(p.x + x * math.cos(a) - y * math.sin(a),
+                           p.y + x * math.sin(a) + y * math.cos(a)) for x, y in z.local]
     return placar

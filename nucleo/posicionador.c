@@ -41,6 +41,10 @@
 #define W_PROIBIDA  800.0
 #define W_ESPALHA   0.9
 #define W_PAD       2000.0    /* por mm de folga faltando entre pads de pecas diferentes */
+/* Por mm de peca na frente do conector (ver conectores_por_dentro). Forte o
+ * bastante para vencer o fio que o conector puxa: na blink blink, sem isto, J1
+ * foi parar no meio da placa - fechou, mas e incomodo e feio. */
+#define W_CONECTOR  40.0
 /* Zero. O corpo agora e o COURTYARD, e o DRC do KiCad mostra zero courtyard
  * sobreposto na placa feita a mao. A tolerancia de 1 mm2 que existia aqui era
  * compensacao por medir com a caixa errada, e deixou passar R3 cruzando D1. */
@@ -412,6 +416,43 @@ static double em_proibida(const Ctx *c)
 /* Cobre de peca movel perto demais da borda, somado em mm. O DRC do KiCad pegou
  * um pad de R4 colado no Edge.Cuts: a caixa do corpo estava dentro da placa, mas
  * o pad nao respeitava a folga de borda que o projeto pede. */
+/* Conector na PERIFERIA do circuito: em algum dos quatro lados, nenhuma outra
+ * peca fica entre ele e a borda. Nao e encostar na borda - isso atrapalha a
+ * fresa -, e ser a peca mais de fora.
+ *
+ * Para cada lado: das pecas que dividem a faixa do conector (se sobrepoem a ele
+ * no outro eixo), quanto a que mais avanca alem dele naquele sentido passa da
+ * face dele. Zero = ninguem na frente. Fica o lado mais favoravel, e soma-se em
+ * mm sobre os conectores. Furo de fixacao nao conta: e mecanico, fica no canto. */
+static double conectores_por_dentro(const Ctx *c)
+{
+    double total = 0.0;
+    int i, k, lado;
+    for (i = 0; i < c->n_pecas; i++) {
+        double x0, y0, x1, y1, melhor = 1e300;
+        if (c->pecas[i].papel != PB_PAPEL_CONECTOR || !c->pecas[i].movel) continue;
+        caixa(c, i, &x0, &y0, &x1, &y1);
+        for (lado = 0; lado < 4; lado++) {
+            double pior = 0.0;
+            for (k = 0; k < c->n_pecas; k++) {
+                double a0, b0, a1, b1, passa;
+                if (k == i || c->pecas[k].papel == PB_PAPEL_MECANICA) continue;
+                caixa(c, k, &a0, &b0, &a1, &b1);
+                if (lado < 2 && (b1 <= y0 || b0 >= y1)) continue;   /* fora da faixa */
+                if (lado >= 2 && (a1 <= x0 || a0 >= x1)) continue;
+                passa = lado == 0 ? x0 - a0      /* esquerda */
+                      : lado == 1 ? a1 - x1      /* direita */
+                      : lado == 2 ? y0 - b0      /* cima */
+                      :             b1 - y1;     /* baixo */
+                if (passa > pior) pior = passa;
+            }
+            if (pior < melhor) melhor = pior;
+        }
+        total += melhor;
+    }
+    return total;
+}
+
 static double pads_na_borda(const Ctx *c)
 {
     double total = 0.0;
@@ -446,7 +487,8 @@ static double custo_e_lei(const Ctx *c, int *eh_legal)
         *eh_legal = sobre == 0.0 && fo == 0.0 && pr == 0.0 && cola < 1e-6 && bo < 1e-6;
     return comprimento(c) + espalhamento(c)
          + W_SOBREPOE * sobre + W_FORA * fo + W_PROIBIDA * pr
-         + W_PAD * cola + W_PAD * bo;
+         + W_PAD * cola + W_PAD * bo
+         + W_CONECTOR * conectores_por_dentro(c);
 }
 
 
@@ -699,11 +741,35 @@ typedef struct {
     int acabou;
     int melhor_ab, melhor_vias, vencedor;
     double melhor_fio;
+    int melhor_faixa;            /* conectores longe da borda, em faixas de 0,5 mm */
     PbPeca *pose_vencedora;
     double *peso;                /* por rede: quem nao fecha pesa mais no custo */
     int descartados, julgados;
     PbPlacar *placar;            /* publicado ao vivo; `parar` vem de quem chamou */
 } Sorteio;
+
+/* O juiz. A ordem e a do projeto: FECHAR vem antes de tudo - jumper e proibido,
+ * ligacao aberta e defeito. Entre posicoes que fecham igual, ganha a que poe os
+ * conectores na periferia; depois, menos via; depois, menos fio.
+ *
+ * Faltava o conector aqui: ele so pesava no custo do recozimento, e o juiz parava
+ * no primeiro candidato que fechasse tudo. Placa que ja chegava fechada (a que foi
+ * fresada) devolvia a propria entrada, com J1 no meio. */
+#define FAIXA_MM        0.5   /* conector por dentro, comparado de meio em meio mm */
+#define FAIXA_ENCOSTADO 0     /* todo conector na periferia: pode parar */
+
+static int faixa_conectores(const Ctx *c)
+{
+    return (int)floor(conectores_por_dentro(c) / FAIXA_MM);
+}
+
+static int melhor_que(int ab, int faixa, int nv, double fio, const Sorteio *g)
+{
+    if (ab != g->melhor_ab) return ab < g->melhor_ab;
+    if (faixa != g->melhor_faixa) return faixa < g->melhor_faixa;
+    if (nv != g->melhor_vias) return nv < g->melhor_vias;
+    return fio < g->melhor_fio - 1e-6;
+}
 
 static int sorteio_continua(const Sorteio *g)
 {
@@ -733,6 +799,7 @@ static void trabalha(void *arg)
         int k, ab, nv;
         double fio;
         unsigned long long s;
+        int faixa, perde;
 
         tranca(&g->trava);
         if (!sorteio_continua(g)) { destranca(&g->trava); break; }
@@ -752,6 +819,12 @@ static void trabalha(void *arg)
             destranca(&g->trava);
             continue;
         }
+        /* legal() acabou de levar os corpos para o mundo: a medida e desta pose */
+        faixa = faixa_conectores(&c);
+        tranca(&g->trava);
+        perde = g->melhor_ab == 0 && faixa > g->melhor_faixa;
+        destranca(&g->trava);
+        if (perde) continue;     /* nem fechando tudo ganharia: nao vale rotear */
         memset(falhas, 0, (size_t)nr * sizeof(int));
         ab = julga(&c, g->x0, g->y0, g->larg, g->alt, g->contorno, g->n_contorno,
                    &nv, &fio, falhas);
@@ -765,20 +838,19 @@ static void trabalha(void *arg)
                 g->peso[i] += PESO_POR_FALHA * falhas[i];
                 if (g->peso[i] > PESO_MAX) g->peso[i] = PESO_MAX;
             }
-        /* quem fecha mais ganha; empate, menos via; empate, menos fio */
-        if (ab < g->melhor_ab
-                || (ab == g->melhor_ab && nv < g->melhor_vias)
-                || (ab == g->melhor_ab && nv == g->melhor_vias && fio < g->melhor_fio - 1e-6)) {
+        if (melhor_que(ab, faixa, nv, fio, g)) {
             g->melhor_ab = ab; g->melhor_vias = nv; g->melhor_fio = fio;
+            g->melhor_faixa = faixa;
             g->vencedor = k;
             memcpy(g->pose_vencedora, pecas, (size_t)c.n_pecas * sizeof(PbPeca));
         }
-        if (g->melhor_ab == 0) g->acabou = 1;
+        if (g->melhor_ab == 0 && g->melhor_faixa <= FAIXA_ENCOSTADO) g->acabou = 1;
         /* placar ao vivo: a janela do KiCad le enquanto o sorteio corre */
         g->placar->julgados = g->julgados;
         g->placar->abertas_depois = g->melhor_ab;
         g->placar->vias = g->melhor_vias;
         g->placar->vencedor = g->vencedor;
+        g->placar->conectores_mm = g->melhor_faixa * FAIXA_MM;
         destranca(&g->trava);
     }
 
@@ -885,6 +957,9 @@ int pb_posiciona(const PbRegras *r,
      * fecham ja comecam com peso */
     g.melhor_ab = julga(c, x0, y0, larg, alt, contorno, n_contorno,
                         &g.melhor_vias, &g.melhor_fio, falhas);
+    corpos_no_mundo(c);
+    g.melhor_faixa = faixa_conectores(c);
+    placar->conectores_mm = g.melhor_faixa * FAIXA_MM;
     for (i = 0; i < c->n_redes; i++)
         if (falhas[i]) g.peso[i] += PESO_POR_FALHA * falhas[i];
     g.placar = placar;
@@ -893,7 +968,7 @@ int pb_posiciona(const PbRegras *r,
     placar->julgados = placar->descartados = placar->vencedor = 0;
     g.vencedor = 0;
     g.proximo = 1;
-    g.acabou = (g.melhor_ab == 0);
+    g.acabou = (g.melhor_ab == 0 && g.melhor_faixa <= FAIXA_ENCOSTADO);
 
     /* Padrao: METADE dos nucleos. Com todos, o computador inteiro trava enquanto
      * o sorteio roda - e quem esta usando o KiCad precisa da maquina. */

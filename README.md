@@ -11,7 +11,10 @@ e soldar na bancada** — não em fábrica de PCB.
 - **Via soldável.** A via é um furo comum, com a mesma broca e a mesma ilha dos pads (0,8 mm /
   2,5 mm). Você passa um fio e solda dos dois lados.
 - **Respeita o projeto.** Folga da classe de rede, folga cobre–borda do Board Setup e **áreas
-  proibidas quaisquer** (trilha, via, footprint), em qualquer formato.
+  proibidas quaisquer** (trilha, via, footprint), em qualquer formato — inclusive as que vêm
+  dentro de um footprint, como a proteção de um furo de fixação.
+- **Conector na periferia.** Conectores (J, P, CN, X ou footprint de conector) ficam na parte de
+  fora do circuito, sem peça entre eles e a borda — sem serem empurrados contra a borda.
 - **Respeita o seu cadeado.** Peça travada no KiCad não se move. Furo de fixação também não.
 - **Não mexe sem você ver.** Primeiro mostra o resultado; só aplica se você confirmar. E um
   **Ctrl+Z** desfaz tudo.
@@ -61,7 +64,8 @@ No editor de placa, clique no ícone **Roteador CNC** na barra de ferramentas (o
 **Ferramentas → Plugins externos → Roteador CNC**).
 
 1. A janela mostra o que o plugin leu: regras, contorno, áreas proibidas, peças travadas.
-2. Escolha se ele pode **mover as peças** e o **tempo máximo** (120 s por padrão).
+2. Escolha se ele pode **mover as peças**, se os **conectores vão para a periferia** e o **tempo
+   máximo** (120 s por padrão).
 3. **Posicionar e rotear.** Ele sorteia posições em paralelo e mostra o progresso ao vivo; para
    sozinho quando fecha a placa inteira. **Parar** encerra e fica com a melhor até ali.
 4. Confira o resultado: ligações abertas, peças que mudam, trilhas e vias novas, e uma
@@ -102,8 +106,8 @@ as redes que falharam na frente da fila. Fica a melhor passada.
 
 **Posicionador com o roteador como juiz.** Recozimento simulado gera candidatos (posição e giro
 de 90° em 90°); cada candidato legal é **roteado de verdade** e ganha quem fecha mais
-ligações, depois quem usa menos vias. Rede que não fecha passa a pesar mais nos sorteios
-seguintes. Roda em metade dos núcleos da máquina, para não travar o computador.
+ligações, depois quem deixa os conectores na periferia, depois quem usa menos vias. Rede que não
+fecha passa a pesar mais nos sorteios seguintes. Roda em metade dos núcleos da máquina, para não travar o computador.
 
 **Legal é o que o KiCad aceita.** O corpo de cada peça é o casco do **courtyard real** (não a
 caixa dele), sem encostar em outro; nenhuma peça fica fora da placa ou em área que proíbe

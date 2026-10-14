@@ -53,6 +53,9 @@ class Janela(wx.Dialog):
         self.c_mover = wx.CheckBox(painel, label="Mover as pecas (as travadas ficam)")
         self.c_mover.SetValue(True)
         opcoes.Add(self.c_mover, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 16)
+        self.c_conectores = wx.CheckBox(painel, label="Conectores na periferia")
+        self.c_conectores.SetValue(True)
+        opcoes.Add(self.c_conectores, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 16)
         opcoes.Add(wx.StaticText(painel, label="Tempo maximo:"), 0,
                    wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
         self.s_tempo = wx.SpinCtrl(painel, min=5, max=3600, initial=120,
@@ -97,6 +100,7 @@ class Janela(wx.Dialog):
         self.b_ler.Enable(not rodando)
         self.b_rodar.Enable(not rodando)
         self.c_mover.Enable(not rodando)
+        self.c_conectores.Enable(not rodando)
         self.s_tempo.Enable(not rodando)
         self.b_parar.Enable(rodando)
         self.b_aplicar.Enable(not rodando and self.resultado is not None)
@@ -120,6 +124,7 @@ class Janela(wx.Dialog):
         self.placar = nativo.PbPlacar()
         self.inicio = time.time()
         mover = self.c_mover.GetValue()
+        self.periferia = self.c_conectores.GetValue()
         segundos = float(self.s_tempo.GetValue())
         self.prazo = segundos if mover else 0.0
         self.status.SetLabel("preparando...")
@@ -132,7 +137,8 @@ class Janela(wx.Dialog):
     def _trabalho(self, p, mover, segundos):
         try:
             if mover:
-                motor.posiciona(p, self.regras, segundos=segundos, placar=self.placar)
+                motor.posiciona(p, self.regras, segundos=segundos, placar=self.placar,
+                                conectores_na_periferia=self.periferia)
             res = motor.roteia(p, self.regras)
             problemas = confere(p, self.regras, res)
             wx.CallAfter(self._pronto, p, res, problemas, mover)
@@ -149,9 +155,10 @@ class Janela(wx.Dialog):
             self.barra.SetValue(min(1000, int(1000 * passou / self.prazo)))
             self.status.SetLabel(
                 "%.0f s de %.0f | posicoes roteadas: %d | melhor ate agora: %d "
-                "aberta(s), %d via(s)  (sem mover pecas: %d)"
+                "aberta(s), %d via(s), %.1f mm de peca na frente dos conectores  "
+                "(sem mover pecas: %d)"
                 % (passou, self.prazo, pl.julgados, pl.abertas_depois, pl.vias,
-                   pl.abertas_antes))
+                   pl.conectores_mm, pl.abertas_antes))
         else:
             self.barra.Pulse()
             self.status.SetLabel("roteando... %.0f s" % passou)
@@ -180,6 +187,10 @@ class Janela(wx.Dialog):
                      % (time.time() - self.inicio, pl.julgados))
             L.append("  ligacoes abertas ... %d (rotear sem mover pecas daria %d)"
                      % (len(res.abertas), pl.abertas_antes))
+            if self.periferia:
+                L.append("  conectores ......... %s"
+                         % ("na periferia" if pl.conectores_mm == 0 else
+                            "%.1f mm de peca na frente" % pl.conectores_mm))
             L.append("  pecas que mudam .... %d: %s"
                      % (len(self.mudam), ", ".join(self.mudam) or "nenhuma"))
         else:
@@ -278,6 +289,10 @@ class Janela(wx.Dialog):
         L.append("")
 
         travadas = [x.ref for x in p.pecas if x.travada]
+        conectores = [x.ref for x in p.pecas if x.conector]
+        L.append("CONECTORES (vao para a periferia): %s"
+                 % (", ".join(conectores) or "nenhum reconhecido"))
+        L.append("")
         L.append("PECAS TRAVADAS: %s" % (", ".join(travadas) if travadas else
                                          "nenhuma - o cadeado e o do proprio KiCad"))
         L.append("")

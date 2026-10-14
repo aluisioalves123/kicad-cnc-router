@@ -83,6 +83,10 @@ class Proibida:
     # O KiCad proibe footprint separadamente. Penalizar peca em toda area de regra
     # erraria nas areas que barram so trilha ou so via.
     sem_footprint: bool = False
+    # Area que mora DENTRO de um footprint (a "Protection" de uma presilha, por
+    # exemplo) anda com ele: guarda a peca dona e o poligono no referencial dela.
+    dono: str = ""
+    local: list = field(default_factory=list)
 
 
 @dataclass
@@ -108,6 +112,8 @@ class Peca:
     # casco convexo deles. largura/altura/cx/cy ficam como reserva para peca
     # sem courtyard.
     corpo: list = field(default_factory=list)
+    # Conector: o posicionador leva para a periferia (ver _eh_conector).
+    conector: bool = False
     cx: float = 0.0
     cy: float = 0.0
     pads: list = field(default_factory=list)
@@ -168,6 +174,25 @@ def _caixa_do_courtyard(fp):
         if poly.OutlineCount():
             return poly.BBox()
     return fp.GetBoundingBox(False, False)
+
+
+# Como a perfboard reconhecia: referencia de conector (J1, P2, CN3, X1) ou
+# footprint que se declara conector. Pelo nome do footprint pega tambem o
+# conector que alguem numerou fora do padrao.
+_PREFIXOS_CONECTOR = ("J", "P", "CN", "X")
+_NOMES_CONECTOR = ("conn", "pinheader", "pin_header", "pinsocket", "pin_socket",
+                   "terminalblock", "terminal_block", "jst", "molex", "usb",
+                   "barrel", "jack", "header")
+
+
+def _eh_conector(fp) -> bool:
+    ref = fp.GetReference().upper()
+    letras = ref.rstrip("0123456789")
+    if letras in _PREFIXOS_CONECTOR and letras != ref:
+        return True
+    fpid = fp.GetFPID()
+    nome = (str(fpid.GetLibNickname()) + ":" + str(fpid.GetLibItemName())).lower()
+    return any(n in nome for n in _NOMES_CONECTOR)
 
 
 def _pontos_do_courtyard(fp) -> list:
@@ -242,6 +267,7 @@ def ler(board) -> Placa:
             corpo=[((x - ox) * math.cos(a) - (y - oy) * math.sin(a),
                     (x - ox) * math.sin(a) + (y - oy) * math.cos(a))
                    for x, y in _pontos_do_courtyard(fp)],
+            conector=_eh_conector(fp),
         )
         p.pecas.append(peca)
         for pad in fp.Pads():
@@ -268,7 +294,13 @@ def ler(board) -> Placa:
                 giro_local=pad.GetOrientationDegrees() - fp.GetOrientationDegrees(),
             ))
 
-    for zona in board.Zones():
+    # Areas de regra da placa E as que vem dentro dos footprints. Faltavam as do
+    # footprint: a "Protection" das presilhas da blink blink ficou de fora, e o
+    # DRC do KiCad pegou trilha de GND passando dentro dela.
+    zonas = [(zona, None) for zona in board.Zones()]
+    for fp in board.GetFootprints():
+        zonas += [(zona, fp) for zona in fp.Zones()]
+    for zona, fp in zonas:
         if not zona.GetIsRuleArea():
             continue
         # Area proibida vale para um CONJUNTO de camadas, nao para uma. Lida com
@@ -280,15 +312,24 @@ def ler(board) -> Placa:
         forma = zona.Outline()
         for i in range(forma.OutlineCount()):
             c = forma.Outline(i)
-            p.proibidas.append(Proibida(
+            pontos = [(mm(c.CPoint(k).x), mm(c.CPoint(k).y))
+                      for k in range(c.PointCount())]
+            z = Proibida(
                 camadas=camadas,
                 sem_trilha=bool(zona.GetDoNotAllowTracks()),
                 sem_via=bool(zona.GetDoNotAllowVias()),
                 sem_cobre=bool(zona.GetDoNotAllowZoneFills()),
                 sem_footprint=bool(zona.GetDoNotAllowFootprints()),
-                poligono=[(mm(c.CPoint(k).x), mm(c.CPoint(k).y))
-                          for k in range(c.PointCount())],
-            ))
+                poligono=pontos,
+            )
+            if fp is not None:
+                ox, oy = mm(fp.GetPosition().x), mm(fp.GetPosition().y)
+                a = math.radians(fp.GetOrientationDegrees())     # mundo -> local
+                z.dono = fp.GetReference()
+                z.local = [((x - ox) * math.cos(a) - (y - oy) * math.sin(a),
+                            (x - ox) * math.sin(a) + (y - oy) * math.cos(a))
+                           for x, y in pontos]
+            p.proibidas.append(z)
 
     for t in board.Tracks():
         if t.GetClass() == "PCB_VIA":

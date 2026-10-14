@@ -28,7 +28,7 @@
  * "15 pinos soltos" em toda configuracao. Demorei a desconfiar justamente porque
  * parecia certo. Binario incompativel tem de falhar na cara, nao mentir baixinho.
  */
-#define PB_ABI 7   /* 7: PbPlacar ao vivo, com pedido de parar */
+#define PB_ABI 8   /* 8: PbPeca.papel - conector vai para a periferia */
 /* (o corpo agora e o courtyard - mesma struct, mesma ABI) */
 
 /* ------------------------------------------------------------------ formas */
@@ -98,7 +98,16 @@ typedef struct {
      * convexo deles; sem pontos, vale a caixa larg x alt em (cx, cy). */
     int n_corpo;
     const double *corpo;
+    int papel;           /* PB_PAPEL_* */
 } PbPeca;
+
+/* Papel da peca para o posicionador. Conector vai para a PERIFERIA do circuito
+ * (nenhuma peca entre ele e a borda - nao encostado nela): fio saindo do meio da
+ * placa e feio e atrapalha a montagem. Mecanica (furo de fixacao) nao conta como
+ * peca no caminho de ninguem. */
+#define PB_PAPEL_COMUM     0
+#define PB_PAPEL_CONECTOR  1
+#define PB_PAPEL_MECANICA  2
 
 /* Pad no referencial da PECA, antes do giro dela. */
 typedef struct {
@@ -133,6 +142,9 @@ typedef struct {
      * julgados/descartados/abertas_depois/vias/vencedor atualizados - e o que a
      * janela do KiCad mostra. */
     volatile int parar;
+    /* Quanto de peca ainda fica na frente dos conectores na vencedora, somado em
+     * mm (multiplos de 0,5). Zero = todos na periferia. */
+    double conectores_mm;
 } PbPlacar;
 
 #ifdef __cplusplus

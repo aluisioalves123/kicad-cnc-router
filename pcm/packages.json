@@ -34,7 +34,7 @@
       ],
       "versions": [
         {
-          "version": "1.0.2",
+          "version": "1.0.3",
           "status": "stable",
           "kicad_version": "10.0",
           "runtime": "swig",
@@ -42,10 +42,10 @@
             "windows",
             "linux"
           ],
-          "download_url": "https://github.com/aluisioalves123/kicad-cnc-router/releases/download/v1.0.2/com_github_aluisioalves123_cncrouter-1.0.2.zip",
-          "download_sha256": "20dd66be71c88d954afe63ebed6a2831422ca347615c995ef85e08a604f8b371",
-          "download_size": 115023,
-          "install_size": 285588
+          "download_url": "https://github.com/aluisioalves123/kicad-cnc-router/releases/download/v1.0.3/com_github_aluisioalves123_cncrouter-1.0.3.zip",
+          "download_sha256": "2b5dacc2b9b0b9f48ab7e71280295faa1d08b0679ca1f84a71c19af8cee62279",
+          "download_size": 118606,
+          "install_size": 292678
         }
       ]
     }
