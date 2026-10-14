@@ -117,7 +117,14 @@ static int cabe_via(PbMapa *m, int c, int l, int rede)
      * e cada via exigia 1,4 mm de vao em vez de 0,5 - um circulo livre de 5,3 mm
      * em vez de 3,5. Na placa apertada isso proibia quase toda via, e o roteador
      * entregava ligacao aberta com a face de cima vazia. */
-    double raio_mm = m->regras.via_ilha / 2.0 - m->regras.trilha / 2.0;
+    double raio_mm = m->regras.via_ilha / 2.0 - m->regras.trilha / 2.0
+                   /* A conferencia so olha o CENTRO das celulas, e a ilha da via
+                    * entre um centro e outro pode chegar mais perto do cobre
+                    * vizinho: a via saia 0,03 mm dentro da folga de 0,4 (pads do
+                    * J1, interfone 60x45). Conferir um raio maior em duas meias
+                    * diagonais de celula garante a folga: para todo cobre perto
+                    * demais existe uma celula pintada dentro desse raio. */
+                   + m->regras.grade * RAIZ2;
     int fora = (int)ceil(raio_mm / m->regras.grade);
     int dentro = (int)(fora / RAIZ2);
     int face, dc, dl;
@@ -370,10 +377,14 @@ int pb_roteia(PbMapa *m, int rede,
 
         peso = (face == 0) ? m->regras.peso_cima : 1.0;
         /* embaixo, dentro do plano de outra rede: cada passo corta o plano */
-        if (face == 1 && m->regras.peso_plano > 1.0) {
+        if (m->regras.peso_plano > 1.0) {
             int ip;
             for (ip = 0; ip < m->n_planos; ip++)
-                if (m->plano_face[ip] == 1 && m->plano_rede[ip] != rede
+                /* so o plano que liga os pads (o de baixo) e preservado: o de
+                 * cima e cobre que sobra, ligado por costura - encarecer a face
+                 * de cima tirava a rota de fuga das trilhas (interfone 60x45:
+                 * 2 -> 4 abertas com o segundo plano) */
+                if (m->plano_face[ip] == face && m->plano_liga[ip] && m->plano_rede[ip] != rede
                         && m->plano_regiao[ip][l * cols + c]) {
                     peso *= m->regras.peso_plano;
                     break;

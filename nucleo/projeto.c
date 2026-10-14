@@ -190,8 +190,19 @@ static int plano_da_rede(const PbMapa *m, int rede)
 {
     int i;
     for (i = 0; i < m->n_planos; i++)
-        if (m->plano_rede[i] == rede && m->plano_face[i] == 1) return i;
+        if (m->plano_rede[i] == rede) return i;
     return -1;
+}
+
+/* A celula, nesta face, e plano de verdade de ALGUMA zona da rede? (Duas zonas
+ * da mesma rede na mesma face sao um plano so onde se tocam.) */
+static int e_plano_da_rede(const PbMapa *m, int rede, int face, int cel)
+{
+    int ip;
+    for (ip = 0; ip < m->n_planos; ip++)
+        if (m->plano_rede[ip] == rede && m->plano_face[ip] == face && pb_e_plano(m, ip, cel))
+            return 1;
+    return 0;
 }
 
 static int acha(int *pai, int x)
@@ -249,7 +260,7 @@ static int plano_perto(const PbMapa *m, int ip, const Pedacos *pd, double x, dou
             double ex = pb_x_de(m, c) - x, ey = pb_y_de(m, l) - y;
             if (c < 0 || l < 0 || c >= cols || l >= lins) continue;
             if (ex * ex + ey * ey > raio * raio) continue;
-            rot = pd->rotulo[l * cols + c];
+            rot = pd->rotulo[(l * cols + c) * 2 + m->plano_face[ip]];
             if (rot >= 0) return rot;
         }
     return -1;
@@ -265,44 +276,50 @@ static int plano_perto(const PbMapa *m, int ip, const Pedacos *pd, double x, dou
  * como ligado a um pedaco se o alivio termico fecha: andando do centro do pad
  * para fora, pelo menos DOIS raios (retos, ou a 45) encontram plano. Um raio so
  * e o que o DRC do KiCad chama de alivio termico faminto. */
-static void pedacos_do_plano(PbMapa *m, int ip, const Rede *r, const PbAlvo *alvos,
+static void pedacos_do_plano(PbMapa *m, int rede, const Rede *r, const PbAlvo *alvos,
                              Pedacos *pd)
 {
-    int cols = m->colunas, lins = m->linhas;
+    int cols = m->colunas, lins = m->linhas, face, ip;
     size_t n = (size_t)cols * lins, i;
     int *fila = (int *)malloc(n * sizeof(int));
     int k;
 
-    pd->rotulo = (int *)malloc(n * sizeof(int));
+    /* rotulo por celula x FACE: a rede pode ter plano embaixo e em cima, e os
+     * pedacos das duas faces entram no mesmo agrupamento - quem os junta e via
+     * de costura, que o roteamento da rede faz quando precisa */
+    pd->rotulo = (int *)malloc(n * 2 * sizeof(int));
     pd->n_pedacos = 0;
-    for (i = 0; i < n; i++) pd->rotulo[i] = -1;
-    for (i = 0; i < n; i++) {
-        int ini = 0, fim = 0;
-        if (pd->rotulo[i] >= 0 || !pb_e_plano(m, ip, (int)i))
-            continue;
-        fila[fim++] = (int)i;
-        pd->rotulo[i] = pd->n_pedacos;
-        while (ini < fim) {
-            int cel = fila[ini++], c = cel % cols, l = cel / cols, d;
-            for (d = 0; d < 8; d += 2) {
-                int nc = c + DC8[d], nl = l + DL8[d], v;
-                if (nc < 0 || nl < 0 || nc >= cols || nl >= lins) continue;
-                v = nl * cols + nc;
-                if (pd->rotulo[v] < 0 && pb_e_plano(m, ip, v)) {
-                    pd->rotulo[v] = pd->n_pedacos;
-                    fila[fim++] = v;
+    for (i = 0; i < n * 2; i++) pd->rotulo[i] = -1;
+    for (face = 0; face < 2; face++)
+        for (i = 0; i < n; i++) {
+            int ini = 0, fim = 0;
+            if (pd->rotulo[i * 2 + face] >= 0 || !e_plano_da_rede(m, rede, face, (int)i))
+                continue;
+            fila[fim++] = (int)i;
+            pd->rotulo[i * 2 + face] = pd->n_pedacos;
+            while (ini < fim) {
+                int cel = fila[ini++], c = cel % cols, l = cel / cols, d;
+                for (d = 0; d < 8; d += 2) {
+                    int nc = c + DC8[d], nl = l + DL8[d], v;
+                    if (nc < 0 || nl < 0 || nc >= cols || nl >= lins) continue;
+                    v = nl * cols + nc;
+                    if (pd->rotulo[v * 2 + face] < 0 && e_plano_da_rede(m, rede, face, v)) {
+                        pd->rotulo[v * 2 + face] = pd->n_pedacos;
+                        fila[fim++] = v;
+                    }
                 }
             }
+            pd->n_pedacos++;
         }
-        pd->n_pedacos++;
-    }
     free(fila);
 
     pd->pai = (int *)malloc((size_t)(pd->n_pedacos + r->n) * sizeof(int));
     for (k = 0; k < pd->n_pedacos + r->n; k++) pd->pai[k] = k;
-    for (k = 0; k < r->n; k++) {
+    for (k = 0; k < r->n; k++)
+    for (ip = 0; ip < m->n_planos; ip++) {
         const PbAlvo *a = &alvos[r->indices[k]];
         int bate[8], retos = 0, tortos = 0, d, usa_retos = 1, usa_tortos = 1;
+        if (m->plano_rede[ip] != rede || !m->plano_liga[ip]) continue;
         /* Os raios saem em angulos FIXOS, e com largura: o KiCad acusou alivio
          * termico faminto (C4 no interfone) quando a conta aceitava quaisquer 2
          * de 8 direcoes testando um fio so. */
@@ -360,7 +377,6 @@ double pb_plano_perdido(const PbMapa *m)
         const unsigned char *regiao = m->plano_regiao[ip];
         int face = m->plano_face[ip], rede = m->plano_rede[ip];
         long na_zona = 0, vivo = 0;
-        if (face != 1) continue;
         for (i = 0; i < n; i++) { rotulo[i] = -1; if (regiao[i]) na_zona++; }
         for (i = 0; i < n; i++) {
             int ini = 0, fim = 0, encosta = 0;
@@ -404,12 +420,12 @@ double pb_plano_perdido(const PbMapa *m)
 
 /* Junta ao que ja esta ligado o grupo `g` inteiro: os pads dele e todo o plano
  * dele viram ponto de partida. Devolve quantos pads entraram agora. */
-static int junta_grupo(const PbMapa *m, int ip, Pedacos *pd, int g, const Rede *r,
+static int junta_grupo(const PbMapa *m, Pedacos *pd, int g, const Rede *r,
                        const PbAlvo *alvos, char *ligado,
                        int *origens, int *n_origens, int max_origens)
 {
-    int k, entraram = 0, face = m->plano_face[ip];
-    size_t i, n = (size_t)m->colunas * m->linhas;
+    int k, entraram = 0;
+    size_t i, n = (size_t)m->colunas * m->linhas * 2;
     for (k = 0; k < r->n; k++) {
         int idx = r->indices[k];
         if (ligado[idx] || acha(pd->pai, pd->n_pedacos + k) != g) continue;
@@ -425,9 +441,9 @@ static int junta_grupo(const PbMapa *m, int ip, Pedacos *pd, int g, const Rede *
     for (i = 0; i < n && *n_origens < max_origens; i++) {
         if (pd->rotulo[i] < 0 || acha(pd->pai, pd->rotulo[i]) != g) continue;
         pd->rotulo[i] = -1;                    /* ja entrou: nao entra de novo */
-        origens[*n_origens * 3 + 0] = (int)(i % (size_t)m->colunas);
-        origens[*n_origens * 3 + 1] = (int)(i / (size_t)m->colunas);
-        origens[*n_origens * 3 + 2] = face;
+        origens[*n_origens * 3 + 0] = (int)((i / 2) % (size_t)m->colunas);
+        origens[*n_origens * 3 + 1] = (int)((i / 2) / (size_t)m->colunas);
+        origens[*n_origens * 3 + 2] = (int)(i % 2);
         (*n_origens)++;
     }
     return entraram;
@@ -624,7 +640,7 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
             /* rede de plano: comeca do maior grupo (pads que o plano ja liga),
              * com o plano inteiro dele como ponto de partida */
             int k, g0 = -1, mais = 0, entraram;
-            pedacos_do_plano(m, ip, r, alvos, &pd);
+            pedacos_do_plano(m, r->rede, r, alvos, &pd);
             /* pads que a trilha de costura ja juntou sao um grupo so */
             for (k = 0; k < n_pares; k++) {
                 int q, ka = -1, kb = -1;
@@ -642,7 +658,7 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
                 if (conta > mais) { mais = conta; g0 = g; }
             }
             n_origens = 0;
-            entraram = junta_grupo(m, ip, &pd, g0, r, alvos, ligado,
+            entraram = junta_grupo(m, &pd, g0, r, alvos, ligado,
                                    origens, &n_origens, max_caminho);
             restantes = r->n - entraram;
             lig_rede[j] += entraram - 1;
@@ -769,7 +785,7 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
             if (ip >= 0) {
                 /* chegou no pad: o grupo dele (pads e plano) entra junto */
                 int g = grupo_do_pad(&pd, r, melhor), entraram;
-                entraram = junta_grupo(m, ip, &pd, g, r, alvos, ligado,
+                entraram = junta_grupo(m, &pd, g, r, alvos, ligado,
                                        origens, &n_origens, max_caminho);
                 restantes -= entraram;
                 lig_rede[j] += entraram;

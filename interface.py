@@ -315,10 +315,11 @@ class Janela(wx.Dialog):
             elif z.camada == "B.Cu":
                 uso = "nao liga pads (conexao desligada): nao ajuda o roteador"
             elif z.liga_pads:
-                uso = ("ATENCAO: liga pads pela face de CIMA = solda do lado dos "
-                       "componentes. Desligue a conexao com pads desse plano")
+                uso = ("ATENCAO: liga pads pela face de CIMA = solda do lado do "
+                       "corpo das pecas normais. Desligue a conexao com pads desse "
+                       "plano (Propriedades da zona > Conexao com pads: Nenhuma)")
             else:
-                uso = "em cima, so por via: o roteador faz trilha normal"
+                uso = "em cima: liga por via de costura e trilha - o roteador usa"
             L.append("  %s no %s | %s" % (z.rede_nome, z.camada, uso))
         L.append("")
 

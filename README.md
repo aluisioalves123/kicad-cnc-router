@@ -20,6 +20,9 @@ e soldar na bancada** — não em fábrica de PCB.
   face de baixo custa mais para as outras redes, e entre posições que fecham, ganha a que
   deixa mais plano inteiro ligado ao GND. Plano na face de cima ligado a pad seria solda do
   lado dos componentes: a janela avisa.
+- **Plano de GND nas duas faces.** O plano de baixo liga nos pads; o de cima, com a conexão com
+  pads desligada, liga por vias de costura e trilha. O de cima não abre caminho para as outras
+  redes — ajuda blindagem e GND, não o roteamento.
 - **Peças dos dois lados (opcional).** O posicionador pode virar peças para baixo. Cada peça
   continua soldando de um lado só — o oposto ao corpo dela —, então a peça virada é ligada pela
   face de cima. Corpos em lados opostos podem dividir a mesma área, desde que nenhum cubra os

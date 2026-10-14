@@ -199,10 +199,18 @@ static void infla(double *p, int n, double d)
 
 /* Leva todos os cascos para o mundo e anota a caixa de cada um. Uma vez por
  * avaliacao de custo: sobreposicao, borda e area proibida leem daqui. */
+static void corpo_no_mundo(const Ctx *c, int i);
+
 static void corpos_no_mundo(const Ctx *c)
 {
-    int i, k;
-    for (i = 0; i < c->n_pecas; i++) {
+    int i;
+    for (i = 0; i < c->n_pecas; i++) corpo_no_mundo(c, i);
+}
+
+static void corpo_no_mundo(const Ctx *c, int i)
+{
+    int k;
+    {
         const PbPeca *p = &c->pecas[i];
         const double *l = &c->casco[i * MAX_CASCO * 2];
         double *w = &c->mundo[i * MAX_CASCO * 2], *bx = &c->caixas[i * 4];
@@ -551,6 +559,16 @@ static int legal(const Ctx *c)
 
 /* ------------------------------------------------------------------ recozimento */
 
+/* Giro sorteado: 3 em cada 4, multiplo de 90; 1 em 4, na diagonal (45, 135...).
+ * Peca a 45 graus ocupa mais caixa em volta - tem de aparecer quando ajuda, nao
+ * por padrao. O resto do nucleo (corpo, pads, chegada no pad, raio termico) ja
+ * trata qualquer angulo. */
+static double giro_sorteado(unsigned long long *s)
+{
+    if (sorteio(s) < 0.75) return 90.0 * (double)(proximo(s) % 4);
+    return 45.0 + 90.0 * (double)(proximo(s) % 4);
+}
+
 static double arredonda(double v)
 {
     return floor(v / GRADE_POS + 0.5) * GRADE_POS;
@@ -606,7 +624,7 @@ static void recoze(Ctx *c, int passos, unsigned long long *s, double fator_t0,
             if (c->pecas[a].pode_virar && sorteio(s) < 0.35)
                 c->pecas[a].lado = !c->pecas[a].lado;
             else
-                c->pecas[a].giro = 90.0 * (double)(proximo(s) % 4);
+                c->pecas[a].giro = giro_sorteado(s);
         } else {
             double tx, ty;
             b = moveis[proximo(s) % (unsigned long long)n_moveis];
@@ -783,9 +801,148 @@ static void perturba(Ctx *c, const unsigned char *culpadas, unsigned long long *
         movidas[qual] = 1;
         p->x = arredonda(c->bx0 + sorteio(s) * (c->bx1 - c->bx0));
         p->y = arredonda(c->by0 + sorteio(s) * (c->by1 - c->by0));
-        p->giro = 90.0 * (double)(proximo(s) % 4);
+        p->giro = giro_sorteado(s);
         if (p->pode_virar && sorteio(s) < 0.5) p->lado = !p->lado;
     }
+}
+
+/* ------------------------------------------------------------------ do zero */
+
+/* A peca `i`, na pose que esta, cabe junto das ja colocadas? As mesmas regras do
+ * legal(), olhando so ela: dentro da placa, fora de area que proibe footprint,
+ * corpo sem sobrepor corpo do mesmo lado nem cobrir pad do outro lado, pads com
+ * folga dos pads alheios e da borda. */
+static int cabe_aqui(const Ctx *c, int i, const unsigned char *colocada)
+{
+    double x0, y0, x1, y1;
+    int k, j, q, z;
+    corpo_no_mundo(c, i);
+    caixa(c, i, &x0, &y0, &x1, &y1);
+    if (x0 < c->bx0 || x1 > c->bx1 || y0 < c->by0 || y1 > c->by1) return 0;
+    for (z = 0; z < c->n_proibidas; z++)
+        if (c->proibidas[z].sem_footprint
+                && area_comum(c->proibidas[z].pontos, c->proibidas[z].n_pontos,
+                              &c->mundo[i * MAX_CASCO * 2], c->n_casco[i]) > 0.0)
+            return 0;
+    for (k = 0; k < c->n_pecas; k++) {
+        double a0, b0, a1, b1;
+        if (k == i || !colocada[k]) continue;
+        caixa(c, k, &a0, &b0, &a1, &b1);
+        if (x1 + 3 < a0 || a1 + 3 < x0 || y1 + 3 < b0 || b1 + 3 < y0) continue;   /* longe */
+        if (c->pecas[i].lado == c->pecas[k].lado) {
+            if (area_comum(&c->mundo[i * MAX_CASCO * 2], c->n_casco[i],
+                           &c->mundo[k * MAX_CASCO * 2], c->n_casco[k]) > TOLERA_SOBREPOSICAO)
+                return 0;
+        } else if (pads_sob_corpo(c, i, k) + pads_sob_corpo(c, k, i) > 0.0) {
+            return 0;
+        }
+    }
+    for (j = 0; j < c->n_pads; j++) {
+        const PbPadC *pa = &c->pads[j];
+        double xa, ya, ga;
+        if (pa->peca != i) continue;
+        pos_do_pad(c->pecas, pa, &xa, &ya);
+        ga = giro_do_pad(c->pecas, pa);
+        if (xa - raio_na_direcao(pa, ga, M_PI) < c->bx0 + c->r->borda
+                || xa + raio_na_direcao(pa, ga, 0.0) > c->bx1 - c->r->borda
+                || ya - raio_na_direcao(pa, ga, -M_PI / 2) < c->by0 + c->r->borda
+                || ya + raio_na_direcao(pa, ga, M_PI / 2) > c->by1 - c->r->borda)
+            return 0;
+        for (q = 0; q < c->n_pads; q++) {
+            const PbPadC *pb = &c->pads[q];
+            double xb, yb, d, ang;
+            if (pb->peca == i || !colocada[pb->peca]) continue;
+            pos_do_pad(c->pecas, pb, &xb, &yb);
+            d = hypot(xb - xa, yb - ya);
+            if (d > 8.0) continue;
+            ang = atan2(yb - ya, xb - xa);
+            if (raio_na_direcao(pa, ga, ang)
+                    + raio_na_direcao(pb, giro_do_pad(c->pecas, pb), ang + M_PI)
+                    + c->r->folga > d)
+                return 0;
+        }
+    }
+    return 1;
+}
+
+/* Quanto fio a peca `i` puxa ate o que ja esta colocado: para cada pad dela, a
+ * distancia ate o pad mais perto da mesma rede numa peca ja colocada. */
+static double fio_ate_colocadas(const Ctx *c, int i, const unsigned char *colocada)
+{
+    double total = 0.0;
+    int j, q;
+    for (j = 0; j < c->n_pads; j++) {
+        const PbPadC *pa = &c->pads[j];
+        double xa, ya, melhor = -1.0;
+        if (pa->peca != i || !pa->rede) continue;
+        pos_do_pad(c->pecas, pa, &xa, &ya);
+        for (q = 0; q < c->n_pads; q++) {
+            const PbPadC *pb = &c->pads[q];
+            double xb, yb, d;
+            if (pb->peca == i || pb->rede != pa->rede || !colocada[pb->peca]) continue;
+            pos_do_pad(c->pecas, pb, &xb, &yb);
+            d = fabs(xb - xa) + fabs(yb - ya);
+            if (melhor < 0 || d < melhor) melhor = d;
+        }
+        if (melhor > 0) total += melhor;
+    }
+    return total;
+}
+
+/* Monta a placa DO ZERO: as pecas moveis entram uma a uma, das maiores para as
+ * menores (com um pouco de sorteio na ordem), cada uma no melhor lugar livre que
+ * aparecer entre tentativas sorteadas de posicao, giro e lado - melhor = menos
+ * fio ate o que ja entrou. As travadas ficam onde estao.
+ *
+ * Existe porque o recozimento sempre partia da posicao de entrada e andava aos
+ * poucos: com a placa encolhida (interfone de 80x60 para 60x45) a entrada vira
+ * um bolo de pecas sobrepostas e fora do contorno, e em 16 mil sorteios nenhum
+ * saiu legal. Aqui a posicao antiga nao conta. */
+#define ZERO_TENTATIVAS 400
+
+static void monta_do_zero(Ctx *c, unsigned long long *s)
+{
+    int n = c->n_pecas, i, k, t;
+    unsigned char *colocada = (unsigned char *)calloc((size_t)(n > 0 ? n : 1), 1);
+    int *ordem = (int *)malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
+    double *peso = (double *)malloc((size_t)(n > 0 ? n : 1) * sizeof(double));
+    int n_ordem = 0;
+
+    corpos_no_mundo(c);
+    for (i = 0; i < n; i++) {
+        if (!c->pecas[i].movel) { colocada[i] = 1; continue; }
+        {
+            double x0, y0, x1, y1;
+            caixa(c, i, &x0, &y0, &x1, &y1);
+            peso[i] = (x1 - x0) * (y1 - y0) * (0.75 + 0.5 * sorteio(s));
+        }
+        ordem[n_ordem++] = i;
+    }
+    for (i = 1; i < n_ordem; i++) {            /* maiores primeiro */
+        int x = ordem[i];
+        for (k = i; k > 0 && peso[ordem[k - 1]] < peso[x]; k--) ordem[k] = ordem[k - 1];
+        ordem[k] = x;
+    }
+    for (k = 0; k < n_ordem; k++) {
+        PbPeca *p = &c->pecas[ordem[k]], melhor_pose = *p, ultima = *p;
+        double melhor = -1.0;
+        for (t = 0; t < ZERO_TENTATIVAS; t++) {
+            double fio;
+            p->x = arredonda(c->bx0 + sorteio(s) * (c->bx1 - c->bx0));
+            p->y = arredonda(c->by0 + sorteio(s) * (c->by1 - c->by0));
+            p->giro = giro_sorteado(s);
+            if (p->pode_virar) p->lado = (int)(proximo(s) % 2);
+            ultima = *p;
+            if (!cabe_aqui(c, ordem[k], colocada)) continue;
+            fio = fio_ate_colocadas(c, ordem[k], colocada) + sorteio(s);
+            if (melhor < 0 || fio < melhor) { melhor = fio; melhor_pose = *p; }
+        }
+        /* sem lugar livre: fica na ultima tentativa, e o recozimento que se vire */
+        *p = melhor >= 0 ? melhor_pose : ultima;
+        corpo_no_mundo(c, ordem[k]);
+        colocada[ordem[k]] = 1;
+    }
+    free(colocada); free(ordem); free(peso);
 }
 
 /* ------------------------------------------------------------------ paralelo */
@@ -914,7 +1071,7 @@ static int melhor_que(int ab, int faixa, double perda, int nv, double fio,
  * em pose ilegal, e a regiao que desfaz o cruzamento - o J1 junto da ponta de
  * baixo do Nano, no interfone - e pequena demais para ser acertada assim. Aqui
  * cada culpada passa por uma grade de 2,5 mm num raio de 15 mm em volta de onde
- * esta, nos 4 giros (e nos 2 lados, se pode virar), uma pose por vez, o resto da
+ * esta, nos 8 giros de 45 em 45 (e nos 2 lados, se pode virar), uma pose por vez, o resto da
  * vencedora parado. Embaralhada, para os nucleos varrerem a regiao toda por
  * igual em vez de esgotar um canto primeiro. */
 #define SIST_RAIO   15.0
@@ -932,7 +1089,7 @@ static void monta_lista(Sorteio *g, const Ctx *c, unsigned long long *s)
         for (dy = -passos; dy <= passos; dy++)
             for (dx = -passos; dx <= passos; dx++) {
                 if (dx * dx + dy * dy > passos * passos) continue;
-                for (gi = 0; gi < 4; gi++)
+                for (gi = 0; gi < 8; gi++)          /* de 45 em 45 */
                     for (la = 0; la < (p->pode_virar ? 2 : 1); la++) {
                         struct Pose *q;
                         if (n == g->cap_lista) {
@@ -947,7 +1104,7 @@ static void monta_lista(Sorteio *g, const Ctx *c, unsigned long long *s)
                         q->peca = i;
                         q->x = arredonda(p->x + dx * SIST_PASSO);
                         q->y = arredonda(p->y + dy * SIST_PASSO);
-                        q->giro = 90.0 * gi;
+                        q->giro = 45.0 * gi;
                         q->lado = p->pode_virar ? la : p->lado;
                     }
             }
@@ -1025,6 +1182,10 @@ static void trabalha(void *arg)
         proximo(&s);
         if (sistematico) {
             /* nada a recozer: a pose e exatamente a da grade (ilegal sai ja) */
+        } else if (!reparo && (k % 3 == 2 || (g->julgados == 0 && k > 30))) {
+            /* do zero: a posicao de entrada nao conta; depois, acabamento morno */
+            monta_do_zero(&c, &s);
+            recoze(&c, g->passos, &s, 0.3, NULL);
         } else if (reparo) {
             /* a peca que saltou fica CONGELADA no lugar novo: o recozimento, que
              * so enxerga fio, a puxava de volta para o mesmo canal apertado */

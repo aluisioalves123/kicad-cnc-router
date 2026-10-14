@@ -28,7 +28,7 @@
  * "15 pinos soltos" em toda configuracao. Demorei a desconfiar justamente porque
  * parecia certo. Binario incompativel tem de falhar na cara, nao mentir baixinho.
  */
-#define PB_ABI 17  /* 17: rip-up dentro da busca (PbRegras.rasgo; 0 = desligado) */
+#define PB_ABI 18  /* 18: planos nas duas faces (PbPlano.liga_pads) */
 /* (o corpo agora e o courtyard - mesma struct, mesma ABI) */
 
 /* ------------------------------------------------------------------ formas */
@@ -107,6 +107,11 @@ typedef struct {
     double espessura;    /* espessura minima do preenchimento, mm: o KiCad apaga o
                           * que for mais estreito que isto */
     double alivio;       /* vao do alivio termico entre o pad e o plano, mm */
+    /* 1 = liga nos pads da face dele por alivio termico; 0 = conexao com pad
+     * desligada: o plano so liga pelo cobre da rede que encosta nele (trilha,
+     * via de costura). E como o plano de CIMA tem de ser: ligado a pad em cima
+     * seria solda do lado do corpo das pecas normais. */
+    int liga_pads;
 } PbPlano;
 
 /* Um pad a ligar: sempre pela face de baixo, que e a regra do projeto.

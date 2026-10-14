@@ -12,7 +12,7 @@ import ctypes
 import os
 import sys
 
-ABI_ESPERADA = 17
+ABI_ESPERADA = 18
 
 CIRCULO, CAPSULA, RETANGULO, POLIGONO, FORA_DE, SEGMENTO = 0, 1, 2, 3, 4, 5
 CIMA, BAIXO, AMBAS = 1, 2, 3
@@ -91,7 +91,8 @@ class PbPlano(ctypes.Structure):
     _fields_ = [("rede", ctypes.c_int), ("face", ctypes.c_int),
                 ("n_pontos", ctypes.c_int), ("pontos", ctypes.POINTER(ctypes.c_double)),
                 ("raio_largura", ctypes.c_double), ("folga", ctypes.c_double),
-                ("espessura", ctypes.c_double), ("alivio", ctypes.c_double)]
+                ("espessura", ctypes.c_double), ("alivio", ctypes.c_double),
+                ("liga_pads", ctypes.c_int)]
 
 
 class PbProibida(ctypes.Structure):
@@ -223,7 +224,11 @@ def planos_para_c(planos):
     """Planos que valem para ligar pad: os da face de baixo. Plano de cima so liga
     por via e nunca em pad (seria solda do lado dos componentes), entao fica de
     fora da conta - o roteador faz trilha normal para essa rede."""
-    uteis = [z for z in planos if z.camada == "B.Cu" and z.liga_pads]
+    # Os dois lados contam: o de baixo liga nos pads (se a zona deixar); o de
+    # cima so pelo cobre da rede que encosta nele - trilha e via de costura -,
+    # mesmo que a zona diga que liga em pad (ai a janela avisa: em cima seria
+    # solda do lado do corpo das pecas normais).
+    uteis = [z for z in planos if z.camada in ("B.Cu", "F.Cu")]
     vetor = (PbPlano * max(1, len(uteis)))()
     vetor._pontos = []
     for i, z in enumerate(uteis):
@@ -231,9 +236,12 @@ def planos_para_c(planos):
         for k, (x, y) in enumerate(z.poligono):
             pts[k * 2], pts[k * 2 + 1] = x, y
         vetor._pontos.append(pts)
-        vetor[i] = PbPlano(rede=z.rede, face=1, n_pontos=len(z.poligono), pontos=pts,
+        embaixo = z.camada == "B.Cu"
+        vetor[i] = PbPlano(rede=z.rede, face=1 if embaixo else 0,
+                           n_pontos=len(z.poligono), pontos=pts,
                            raio_largura=z.raio_largura, folga=z.folga,
-                           espessura=z.espessura, alivio=z.alivio)
+                           espessura=z.espessura, alivio=z.alivio,
+                           liga_pads=int(embaixo and z.liga_pads))
     vetor._n = len(uteis)
     return vetor
 

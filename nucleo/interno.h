@@ -46,6 +46,7 @@ struct PbMapa {
     double plano_alivio[PB_MAX_PLANOS];  /* vao do alivio termico, mm */
     double plano_espessura[PB_MAX_PLANOS];
     double plano_folga[PB_MAX_PLANOS];   /* folga efetiva da zona, mm */
+    int plano_liga[PB_MAX_PLANOS];       /* liga nos pads por alivio termico */
 
     /* Varredura de alcance (ver alcanca() no roteador): carimbo por estado
      * celula x face, como o do A*, e a fila. */

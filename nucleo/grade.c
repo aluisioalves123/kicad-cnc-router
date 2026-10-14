@@ -377,6 +377,7 @@ int pb_define_planos(PbMapa *m, const PbPlano *planos, int quantos)
              * raio termico que caia nela (J3, interfone) ficava faminto. */
             double zf = p->folga > m->regras.folga ? p->folga : m->regras.folga;
             m->plano_alivio[m->n_planos] = p->alivio;
+            m->plano_liga[m->n_planos] = p->liga_pads;
             m->plano_espessura[m->n_planos] = p->espessura;
             m->plano_folga[m->n_planos] = zf;
             double falta = zf + p->espessura / 2.0 - pb_inflacao(m);
