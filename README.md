@@ -16,7 +16,9 @@ e soldar na bancada** — não em fábrica de PCB.
 - **Plano de GND.** Se a placa tem uma zona de cobre com rede na face de baixo (o plano de GND),
   o roteador deixa o plano ligar os pads dessa rede e só faz trilha para costurar os pedaços
   que as outras trilhas separaram. Cada pad precisa de pelo menos dois raios de alívio térmico
-  chegando ao plano para contar como ligado. Plano na face de cima ligado a pad seria solda do
+  chegando ao plano para contar como ligado. E o plano é **prioridade**: atravessar o plano na
+  face de baixo custa mais para as outras redes, e entre posições que fecham, ganha a que
+  deixa mais plano inteiro ligado ao GND. Plano na face de cima ligado a pad seria solda do
   lado dos componentes: a janela avisa.
 - **Conector na periferia.** Conectores (J, P, CN, X ou footprint de conector) ficam na parte de
   fora do circuito, sem peça entre eles e a borda — sem serem empurrados contra a borda.
@@ -111,7 +113,8 @@ as redes que falharam na frente da fila. Fica a melhor passada.
 
 **Posicionador com o roteador como juiz.** Recozimento simulado gera candidatos (posição e giro
 de 90° em 90°); cada candidato legal é **roteado de verdade** e ganha quem fecha mais
-ligações, depois quem deixa os conectores na periferia, depois quem usa menos vias. Rede que não
+ligações, depois quem deixa os conectores na periferia, depois quem corta menos o plano de GND,
+depois quem usa menos vias. Rede que não
 fecha passa a pesar mais nos sorteios seguintes. Roda em metade dos núcleos da máquina, para não travar o computador.
 
 **Legal é o que o KiCad aceita.** O corpo de cada peça é o casco do **courtyard real** (não a

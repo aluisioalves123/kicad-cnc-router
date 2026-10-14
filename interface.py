@@ -155,10 +155,10 @@ class Janela(wx.Dialog):
             self.barra.SetValue(min(1000, int(1000 * passou / self.prazo)))
             self.status.SetLabel(
                 "%.0f s de %.0f | posicoes roteadas: %d | melhor ate agora: %d "
-                "aberta(s), %d via(s), %.1f mm de peca na frente dos conectores  "
-                "(sem mover pecas: %d)"
+                "aberta(s), %d via(s), plano perdido %.0f mm2, %.1f mm de peca na "
+                "frente dos conectores  (sem mover pecas: %d)"
                 % (passou, self.prazo, pl.julgados, pl.abertas_depois, pl.vias,
-                   pl.conectores_mm, pl.abertas_antes))
+                   pl.plano_perdido, pl.conectores_mm, pl.abertas_antes))
         else:
             self.barra.Pulse()
             self.status.SetLabel("roteando... %.0f s" % passou)
@@ -187,6 +187,9 @@ class Janela(wx.Dialog):
                      % (time.time() - self.inicio, pl.julgados))
             L.append("  ligacoes abertas ... %d (rotear sem mover pecas daria %d)"
                      % (len(res.abertas), pl.abertas_antes))
+            if p.planos:
+                L.append("  plano perdido ...... %.0f mm2 (trilha alheia + ilhas soltas)"
+                         % res.plano_perdido)
             if self.periferia:
                 L.append("  conectores ......... %s"
                          % ("na periferia" if pl.conectores_mm == 0 else

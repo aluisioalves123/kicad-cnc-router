@@ -236,6 +236,16 @@ int pb_roteia(PbMapa *m, int rede,
         if (achou >= 0) break;
 
         peso = (face == 0) ? m->regras.peso_cima : 1.0;
+        /* embaixo, dentro do plano de outra rede: cada passo corta o plano */
+        if (face == 1 && m->regras.peso_plano > 1.0) {
+            int ip;
+            for (ip = 0; ip < m->n_planos; ip++)
+                if (m->plano_face[ip] == 1 && m->plano_rede[ip] != rede
+                        && m->plano_regiao[ip][l * cols + c]) {
+                    peso *= m->regras.peso_plano;
+                    break;
+                }
+        }
 
         for (d = 0; d < 8; d++) {
             int nc = c + DC[d], nl = l + DL[d], prox;

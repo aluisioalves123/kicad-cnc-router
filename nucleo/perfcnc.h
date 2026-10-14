@@ -28,7 +28,7 @@
  * "15 pinos soltos" em toda configuracao. Demorei a desconfiar justamente porque
  * parecia certo. Binario incompativel tem de falhar na cara, nao mentir baixinho.
  */
-#define PB_ABI 9   /* 9: planos (PbPlano, pb_define_planos, pb_posiciona) */
+#define PB_ABI 10  /* 10: plano perdido (metrica, peso no A*, juiz) */
 /* (o corpo agora e o courtyard - mesma struct, mesma ABI) */
 
 /* ------------------------------------------------------------------ formas */
@@ -59,6 +59,10 @@ typedef struct {
     double custo_via;
     double peso_cima;    /* andar pela face de cima custa isto vezes mais */
     double borda;        /* folga cobre-borda da placa, mm (Board Setup) */
+    /* Andar na face de baixo DENTRO do plano de outra rede custa isto vezes mais:
+     * cada trilha ali corta o plano. Na PCB o plano inteiro vale mais que fio
+     * curto. */
+    double peso_plano;
 
     int salto_via;       /* a via so e tentada de N em N celulas */
     long orcamento;      /* teto de nos por busca; 0 = sem teto */
@@ -157,6 +161,8 @@ typedef struct {
     /* Quanto de peca ainda fica na frente dos conectores na vencedora, somado em
      * mm (multiplos de 0,5). Zero = todos na periferia. */
     double conectores_mm;
+    /* Plano perdido na vencedora, mm2 (ver pb_plano_perdido). */
+    double plano_perdido;
 } PbPlacar;
 
 #ifdef __cplusplus
@@ -174,6 +180,11 @@ PB_EXPORT void pb_pinta(PbMapa *m, const PbForma *formas, int quantas);
 /* Diz ao mapa onde ha plano. Chamar depois de pintar os obstaculos e antes de
  * pb_roteia_tudo. Devolve quantos planos ficaram registrados. */
 PB_EXPORT int pb_define_planos(PbMapa *m, const PbPlano *planos, int quantos);
+
+/* Quanto dos planos de baixo NAO existe ligado a rede deles, em mm2: o que as
+ * trilhas alheias ocupam mais as ilhas que elas deixam soltas. E a medida do
+ * estrago que o roteamento faz no plano - quanto menor, melhor. */
+PB_EXPORT double pb_plano_perdido(const PbMapa *m);
 
 PB_EXPORT int pb_colunas(const PbMapa *m);
 PB_EXPORT int pb_linhas(const PbMapa *m);

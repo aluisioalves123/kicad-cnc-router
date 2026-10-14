@@ -12,7 +12,7 @@ import ctypes
 import os
 import sys
 
-ABI_ESPERADA = 9
+ABI_ESPERADA = 10
 
 CIRCULO, CAPSULA, RETANGULO, POLIGONO, FORA_DE, SEGMENTO = 0, 1, 2, 3, 4, 5
 CIMA, BAIXO, AMBAS = 1, 2, 3
@@ -28,6 +28,7 @@ class PbRegras(ctypes.Structure):
         ("custo_curva", ctypes.c_double), ("custo_via", ctypes.c_double),
         ("peso_cima", ctypes.c_double),
         ("borda", ctypes.c_double),
+        ("peso_plano", ctypes.c_double),
         ("salto_via", ctypes.c_int), ("orcamento", ctypes.c_long),
         ("tentativas", ctypes.c_int),
     ]
@@ -94,7 +95,8 @@ class PbPlacar(ctypes.Structure):
                 ("vencedor", ctypes.c_int), ("descartados", ctypes.c_int),
                 ("julgados", ctypes.c_int), ("nucleos", ctypes.c_int),
                 ("segundos", ctypes.c_double), ("parar", ctypes.c_int),
-                ("conectores_mm", ctypes.c_double)]
+                ("conectores_mm", ctypes.c_double),
+                ("plano_perdido", ctypes.c_double)]
 
 
 class NucleoAusente(RuntimeError):
@@ -141,6 +143,8 @@ def _assina(lib):
     lib.pb_pinta.argtypes = [ctypes.c_void_p, P(PbForma), ctypes.c_int]
     lib.pb_define_planos.restype = ctypes.c_int
     lib.pb_define_planos.argtypes = [ctypes.c_void_p, P(PbPlano), ctypes.c_int]
+    lib.pb_plano_perdido.restype = ctypes.c_double
+    lib.pb_plano_perdido.argtypes = [ctypes.c_void_p]
     for nome in ("pb_colunas", "pb_linhas"):
         getattr(lib, nome).restype = ctypes.c_int
         getattr(lib, nome).argtypes = [ctypes.c_void_p]
@@ -196,6 +200,7 @@ def regras_para_c(regras, custos=None, salto_via=5, orcamento=3000000,
         custo_via=getattr(c, "via", 40.0),
         peso_cima=getattr(c, "face_de_cima", 1.15),
         borda=regras.borda,
+        peso_plano=getattr(c, "plano", 2.0),
         salto_via=salto_via, orcamento=orcamento, tentativas=tentativas,
     )
 
@@ -231,6 +236,10 @@ class Mapa:
     def pinta(self, formas):
         vetor = (PbForma * len(formas))(*formas)
         self._lib.pb_pinta(self._p, vetor, len(formas))
+
+    def plano_perdido(self):
+        """mm2 dos planos de baixo que nao existem ligados a rede deles."""
+        return self._lib.pb_plano_perdido(self._p)
 
     def define_planos(self, planos):
         vetor = planos_para_c(planos)

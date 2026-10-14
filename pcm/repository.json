@@ -10,14 +10,14 @@
   },
   "packages": {
     "url": "https://raw.githubusercontent.com/aluisioalves123/kicad-cnc-router/main/pcm/packages.json",
-    "sha256": "e8091877a7bd6985a80a8663a107ce36a989d3b590b124bc0b18a1928e0e7967",
-    "update_timestamp": 1791994396,
-    "update_time_utc": "2026-10-14 16:13:16"
+    "sha256": "d1831dec2c0336c2aa9746f6b70c20060990e20935f50a414799fe70a62380a9",
+    "update_timestamp": 1791996060,
+    "update_time_utc": "2026-10-14 16:41:00"
   },
   "resources": {
-    "url": "https://github.com/aluisioalves123/kicad-cnc-router/releases/download/v1.1.0/resources.zip",
+    "url": "https://github.com/aluisioalves123/kicad-cnc-router/releases/download/v1.2.0/resources.zip",
     "sha256": "a8d02b646440a266a69eafac6a25e00013a81cc5d7edd71e714ae87f087b3696",
-    "update_timestamp": 1791994396,
-    "update_time_utc": "2026-10-14 16:13:16"
+    "update_timestamp": 1791996060,
+    "update_time_utc": "2026-10-14 16:41:00"
   }
 }

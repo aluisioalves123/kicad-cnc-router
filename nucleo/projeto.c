@@ -223,6 +223,54 @@ static void pedacos_do_plano(PbMapa *m, int ip, const Rede *r, const PbAlvo *alv
     }
 }
 
+/* Plano perdido: celulas da zona que nao viram plano ligado a rede. Um pedaco
+ * de plano esta vivo se encosta (vizinhanca de 4) em cobre da propria rede - pad
+ * ou trilha: a zona preenche ate ele, sem folga. Pedaco que nao encosta em nada
+ * da rede o KiCad remove como ilha. */
+double pb_plano_perdido(const PbMapa *m)
+{
+    int cols = m->colunas, lins = m->linhas, ip;
+    size_t n = (size_t)cols * lins, i;
+    long perdido = 0;
+    int *fila, *rotulo;
+    if (m->n_planos == 0) return 0.0;
+    fila = (int *)malloc(n * sizeof(int));
+    rotulo = (int *)malloc(n * sizeof(int));
+    for (ip = 0; ip < m->n_planos; ip++) {
+        const unsigned char *regiao = m->plano_regiao[ip];
+        int face = m->plano_face[ip], rede = m->plano_rede[ip];
+        long na_zona = 0, vivo = 0;
+        if (face != 1) continue;
+        for (i = 0; i < n; i++) { rotulo[i] = -1; if (regiao[i]) na_zona++; }
+        for (i = 0; i < n; i++) {
+            int ini = 0, fim = 0, encosta = 0;
+            if (rotulo[i] >= 0 || !regiao[i] || m->celulas[i * 2 + face] != PB_LIVRE)
+                continue;
+            fila[fim++] = (int)i;
+            rotulo[i] = 1;
+            while (ini < fim) {
+                int cel = fila[ini++], c = cel % cols, l = cel / cols, d;
+                for (d = 0; d < 8; d += 2) {
+                    int nc = c + DC8[d], nl = l + DL8[d], v, dono;
+                    if (nc < 0 || nl < 0 || nc >= cols || nl >= lins) continue;
+                    v = nl * cols + nc;
+                    dono = m->celulas[v * 2 + face];
+                    if (dono == rede) encosta = 1;
+                    if (rotulo[v] < 0 && regiao[v] && dono == PB_LIVRE) {
+                        rotulo[v] = 1;
+                        fila[fim++] = v;
+                    }
+                }
+            }
+            if (encosta) vivo += fim;
+        }
+        perdido += na_zona - vivo;
+    }
+    free(fila);
+    free(rotulo);
+    return (double)perdido * m->regras.grade * m->regras.grade;
+}
+
 /* Junta ao que ja esta ligado o grupo `g` inteiro: os pads dele e todo o plano
  * dele viram ponto de partida. Devolve quantos pads entraram agora. */
 static int junta_grupo(const PbMapa *m, int ip, Pedacos *pd, int g, const Rede *r,
@@ -500,7 +548,7 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
     PbViaOut *t_vias = NULL;
     PbAberta *t_abertas = NULL;
     int melhor_lig = 0, melhor_ns = 0, melhor_nv = 0, melhor_na = 0;
-    double melhor_fio = 0.0;
+    double melhor_fio = 0.0, melhor_perda = 0.0;
     unsigned long long s = 0x2545F4914F6CDD1DULL;
 
     *n_segs_out = *n_vias_out = *n_abertas_out = 0;
@@ -540,7 +588,7 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
     passadas = m->regras.tentativas > 0 ? m->regras.tentativas : 1;
     for (passada = 0; passada < passadas; passada++) {
         int ns, nv, na, lig;
-        double fio;
+        double fio, perda;
 
         /* ordem: quem falhou vai na frente; o resto, nas duas primeiras passadas,
          * por numero de pads (mais pads primeiro); da terceira em diante, sorteado */
@@ -563,9 +611,14 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
                           melhor_passada < 0 ? -1 : melhor_na, falhou);
         ultima = passada;
         fio = fio_de(m, t_segs, ns);
+        perda = pb_plano_perdido(m);
+        /* fecha mais > menos plano perdido > menos via > menos fio */
         if (melhor_passada < 0 || na < melhor_na
-                || (na == melhor_na && nv < melhor_nv)
-                || (na == melhor_na && nv == melhor_nv && fio < melhor_fio - 1e-6)) {
+                || (na == melhor_na && perda < melhor_perda - 0.5)
+                || (na == melhor_na && fabs(perda - melhor_perda) <= 0.5
+                    && (nv < melhor_nv
+                        || (nv == melhor_nv && fio < melhor_fio - 1e-6)))) {
+            melhor_perda = perda;
             melhor_passada = passada;
             melhor_na = na; melhor_nv = nv; melhor_ns = ns;
             melhor_fio = fio; melhor_lig = lig;

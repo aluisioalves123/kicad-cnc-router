@@ -24,9 +24,12 @@ class Custos:
     lugar a mais para a fresa deixar rebarba.
     """
 
-    def __init__(self, curva=6.0, via=40.0, face_de_cima=1.15):
+    def __init__(self, curva=6.0, via=40.0, face_de_cima=1.15, plano=2.0):
         self.curva = curva
         self.via = via
+        # Atravessar o plano de outra rede pela face de baixo: cada trilha ali
+        # corta o plano de GND. Na PCB o plano vale mais que fio curto.
+        self.plano = plano
         # Andar por cima custa um pouco mais: a face de cima e o caminho de
         # passagem, e deixa-la livre ajuda as redes que ainda vao passar por ali.
         self.face_de_cima = face_de_cima

@@ -597,7 +597,7 @@ static void recoze(Ctx *c, int passos, unsigned long long *s)
  * e preenche vias/comprimento para desempate. */
 static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
                  const double *contorno, int n_contorno,
-                 int *vias_out, double *fio_out, int *falhas)
+                 int *vias_out, double *fio_out, int *falhas, double *perda_out)
 {
     PbMapa *m = pb_cria(c->r, x0, y0, larg, alt);
     PbForma *formas;
@@ -668,6 +668,7 @@ static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
                      pb_y_de(m, segs[i].l2) - pb_y_de(m, segs[i].l1));
 
     free(segs); free(vias); free(abertas); free(formas); free(alvos);
+    *perda_out = pb_plano_perdido(m);    /* antes de destruir o mapa */
     pb_destroi(m);
     *vias_out = nv;
     *fio_out = fio;
@@ -745,6 +746,8 @@ typedef struct {
     int melhor_ab, melhor_vias, vencedor;
     double melhor_fio;
     int melhor_faixa;            /* conectores longe da borda, em faixas de 0,5 mm */
+    double melhor_perda;         /* plano perdido, mm2 */
+    int sem_melhora;             /* sorteios roteados desde a ultima melhora */
     PbPeca *pose_vencedora;
     double *peso;                /* por rede: quem nao fecha pesa mais no custo */
     int descartados, julgados;
@@ -766,10 +769,15 @@ static int faixa_conectores(const Ctx *c)
     return (int)floor(conectores_por_dentro(c) / FAIXA_MM);
 }
 
-static int melhor_que(int ab, int faixa, int nv, double fio, const Sorteio *g)
+#define PERDA_IGUAL     1.0   /* mm2 de plano: menos que isto e empate */
+#define PACIENCIA       300   /* com plano: sorteios sem melhora antes de parar */
+
+static int melhor_que(int ab, int faixa, double perda, int nv, double fio,
+                      const Sorteio *g)
 {
     if (ab != g->melhor_ab) return ab < g->melhor_ab;
     if (faixa != g->melhor_faixa) return faixa < g->melhor_faixa;
+    if (fabs(perda - g->melhor_perda) > PERDA_IGUAL) return perda < g->melhor_perda;
     if (nv != g->melhor_vias) return nv < g->melhor_vias;
     return fio < g->melhor_fio - 1e-6;
 }
@@ -800,7 +808,7 @@ static void trabalha(void *arg)
 
     for (;;) {
         int k, ab, nv;
-        double fio;
+        double fio, perda;
         unsigned long long s;
         int faixa, perde;
 
@@ -830,7 +838,7 @@ static void trabalha(void *arg)
         if (perde) continue;     /* nem fechando tudo ganharia: nao vale rotear */
         memset(falhas, 0, (size_t)nr * sizeof(int));
         ab = julga(&c, g->x0, g->y0, g->larg, g->alt, g->contorno, g->n_contorno,
-                   &nv, &fio, falhas);
+                   &nv, &fio, falhas, &perda);
 
         tranca(&g->trava);
         g->julgados++;
@@ -841,19 +849,27 @@ static void trabalha(void *arg)
                 g->peso[i] += PESO_POR_FALHA * falhas[i];
                 if (g->peso[i] > PESO_MAX) g->peso[i] = PESO_MAX;
             }
-        if (melhor_que(ab, faixa, nv, fio, g)) {
+        g->sem_melhora++;
+        if (melhor_que(ab, faixa, perda, nv, fio, g)) {
             g->melhor_ab = ab; g->melhor_vias = nv; g->melhor_fio = fio;
             g->melhor_faixa = faixa;
+            g->melhor_perda = perda;
+            g->sem_melhora = 0;
             g->vencedor = k;
             memcpy(g->pose_vencedora, pecas, (size_t)c.n_pecas * sizeof(PbPeca));
         }
-        if (g->melhor_ab == 0 && g->melhor_faixa <= FAIXA_ENCOSTADO) g->acabou = 1;
+        /* sem plano, fechou e conector na periferia: pronto. Com plano, ainda
+         * da para perder menos plano - segue ate parar de melhorar */
+        if (g->melhor_ab == 0 && g->melhor_faixa <= FAIXA_ENCOSTADO
+                && (g->base.n_planos == 0 || g->sem_melhora >= PACIENCIA))
+            g->acabou = 1;
         /* placar ao vivo: a janela do KiCad le enquanto o sorteio corre */
         g->placar->julgados = g->julgados;
         g->placar->abertas_depois = g->melhor_ab;
         g->placar->vias = g->melhor_vias;
         g->placar->vencedor = g->vencedor;
         g->placar->conectores_mm = g->melhor_faixa * FAIXA_MM;
+        g->placar->plano_perdido = g->melhor_perda;
         destranca(&g->trava);
     }
 
@@ -961,7 +977,8 @@ int pb_posiciona(const PbRegras *r,
     /* candidato 0: a posicao de entrada, intocada - e as redes dela que nao
      * fecham ja comecam com peso */
     g.melhor_ab = julga(c, x0, y0, larg, alt, contorno, n_contorno,
-                        &g.melhor_vias, &g.melhor_fio, falhas);
+                        &g.melhor_vias, &g.melhor_fio, falhas, &g.melhor_perda);
+    placar->plano_perdido = g.melhor_perda;
     corpos_no_mundo(c);
     g.melhor_faixa = faixa_conectores(c);
     placar->conectores_mm = g.melhor_faixa * FAIXA_MM;
@@ -973,7 +990,8 @@ int pb_posiciona(const PbRegras *r,
     placar->julgados = placar->descartados = placar->vencedor = 0;
     g.vencedor = 0;
     g.proximo = 1;
-    g.acabou = (g.melhor_ab == 0 && g.melhor_faixa <= FAIXA_ENCOSTADO);
+    g.acabou = (g.melhor_ab == 0 && g.melhor_faixa <= FAIXA_ENCOSTADO
+                && n_planos == 0);
 
     /* Padrao: METADE dos nucleos. Com todos, o computador inteiro trava enquanto
      * o sorteio roda - e quem esta usando o KiCad precisa da maquina. */

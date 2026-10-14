@@ -36,6 +36,8 @@ class Resultado:
                         for t in bruto["trilhas"]]
         self.vias = [(mapa.para_mm(v[0], v[1])[0], mapa.para_mm(v[0], v[1])[1], v[2])
                      for v in bruto["vias"]]
+        # o mapa termina com o cobre do resultado: da para medir o estrago no plano
+        self.plano_perdido = mapa.plano_perdido()
 
     @property
     def ok(self):
