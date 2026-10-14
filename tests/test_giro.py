@@ -105,6 +105,35 @@ class TestGiro(unittest.TestCase):
                         pior = (erro, "%s a %.0f graus" % (p.ref, ang))
         self.assertLess(pior[0], 1e-3, "courtyard fora do lugar: %.3f mm em %s" % pior)
 
+    def test_peca_virada_cai_onde_o_kicad_poe(self):
+        """Peca virada (corpo embaixo): o KiCad espelha o y local. O modelo guarda
+        o referencial sem espelho e espelha ao levar ao mundo - pads e corpo
+        tem de bater com o que o proprio KiCad faz ao virar e girar."""
+        pior = (0.0, "")
+        for ang in ANGULOS:
+            board = pcbnew.LoadBoard(PLACA)
+            for fp in board.GetFootprints():
+                fp.SetOrientationDegrees(ang)
+                fp.Flip(fp.GetPosition(), pcbnew.FLIP_DIRECTION_LEFT_RIGHT)
+                fp.SetOrientationDegrees(ang + 40.0)
+            p = leitor.ler(board)
+            pecas = {x.ref: x for x in p.pecas}
+            for pad in p.pads:
+                q = pecas[pad.dono]
+                self.assertEqual(q.lado, 1, q.ref)
+                px, py = local_para_mundo(q.x, q.y, q.giro, pad.dx, -pad.dy)
+                erro = math.hypot(px - pad.x, py - pad.y)
+                if erro > pior[0]:
+                    pior = (erro, "%s a %.0f graus" % (pad.ref, ang))
+            for fp in board.GetFootprints():
+                q = pecas[fp.GetReference()]
+                for (lx, ly), (rx, ry) in zip(q.corpo, leitor._pontos_do_courtyard(fp)):
+                    cx, cy = local_para_mundo(q.x, q.y, q.giro, lx, -ly)
+                    erro = math.hypot(cx - rx, cy - ry)
+                    if erro > pior[0]:
+                        pior = (erro, "corpo de %s a %.0f graus" % (q.ref, ang))
+        self.assertLess(pior[0], 1e-3, "peca virada fora do lugar: %.3f mm em %s" % pior)
+
     def test_forma_do_pad_pintada_bate_com_o_kicad(self):
         """O C pinta o oval girado onde o KiCad diz que o pad esta?
 

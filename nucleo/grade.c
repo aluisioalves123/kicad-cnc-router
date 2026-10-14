@@ -214,6 +214,75 @@ PbMapa *pb_cria(const PbRegras *regras, double x0, double y0,
     return m;
 }
 
+double pb_inflacao(const PbMapa *m)
+{
+    /* A trilha anda de centro em centro de celula, e o meio de um passo na
+     * diagonal pode passar mais perto de um canto de obstaculo do que as duas
+     * pontas - que sao as que a grade confere. O pior caso e o canto vivo, a
+     * D = meia trilha + folga: o meio do passo chega a sqrt(D^2 - (passo/2)^2).
+     * A margem e essa diferenca, mais um fio: 0,003 mm em grade de 0,1 e
+     * 0,013 mm em 0,2. Meia celula, que era a margem antes, comia a folga que
+     * o pino do meio de um TO-92 tem. */
+    double d = m->regras.trilha / 2.0 + m->regras.folga, passo = m->regras.grade;
+    return d + (d - sqrt(d * d - passo * passo / 2.0) + 0.002);
+}
+
+int pb_e_plano(const PbMapa *m, int ip, int cel)
+{
+    int cols = m->colunas, lins = m->linhas, face = m->plano_face[ip];
+    int e = m->plano_erosao[ip], c = cel % cols, l = cel / cols, dc, dl;
+    if (!m->plano_regiao[ip][cel] || m->celulas[cel * 2 + face] != PB_LIVRE) return 0;
+    for (dl = -e; dl <= e; dl++)
+        for (dc = -e; dc <= e; dc++) {
+            int nc = c + dc, nl = l + dl;
+            if (dc * dc + dl * dl > e * e) continue;
+            if (nc < 0 || nl < 0 || nc >= cols || nl >= lins) return 0;
+            if (m->celulas[(nl * cols + nc) * 2 + face] != PB_LIVRE) return 0;
+        }
+    return 1;
+}
+
+void pb_reinicia(PbMapa *m)
+{
+    memset(m->celulas, 0, (size_t)m->colunas * m->linhas * 2 * sizeof(int));
+    m->soma_da_rede = -999999;
+    m->parar = NULL;
+    m->n_via_lista = 0;
+}
+
+int pb_via_permitida(const PbMapa *m, int c, int l, int rede)
+{
+    double minimo = (m->regras.broca + m->regras.folga) / m->regras.grade;
+    int i;
+    for (i = 0; i < m->n_via_lista; i++) {
+        int dc = m->via_lista[i * 3] - c, dl = m->via_lista[i * 3 + 1] - l;
+        if (m->via_lista[i * 3 + 2] != rede) continue;
+        if (dc == 0 && dl == 0) return 1;              /* a mesma via: passa por ela */
+        if ((double)(dc * dc + dl * dl) < minimo * minimo) return 0;
+    }
+    return 1;
+}
+
+void pb_anota_via(PbMapa *m, int c, int l, int rede)
+{
+    int i;
+    for (i = 0; i < m->n_via_lista; i++)
+        if (m->via_lista[i * 3] == c && m->via_lista[i * 3 + 1] == l
+                && m->via_lista[i * 3 + 2] == rede)
+            return;
+    if (m->n_via_lista == m->cap_via_lista) {
+        int cap = m->cap_via_lista ? m->cap_via_lista * 2 : 64;
+        int *novo = (int *)realloc(m->via_lista, (size_t)cap * 3 * sizeof(int));
+        if (!novo) return;
+        m->via_lista = novo;
+        m->cap_via_lista = cap;
+    }
+    m->via_lista[m->n_via_lista * 3] = c;
+    m->via_lista[m->n_via_lista * 3 + 1] = l;
+    m->via_lista[m->n_via_lista * 3 + 2] = rede;
+    m->n_via_lista++;
+}
+
 void pb_destroi(PbMapa *m)
 {
     if (!m) return;
@@ -226,6 +295,7 @@ void pb_destroi(PbMapa *m)
     free(m->bfs_visto);
     free(m->bfs_fila);
     free(m->alvo_marca);
+    free(m->via_lista);
     {
         int i;
         for (i = 0; i < m->n_planos; i++) free(m->plano_regiao[i]);
@@ -242,9 +312,7 @@ void pb_pinta(PbMapa *m, const PbForma *formas, int quantas)
      * A margem e essa diferenca, mais um fio: 0,003 mm em grade de 0,1 e
      * 0,013 mm em 0,2. Meia celula, que era a margem antes, comia a folga que
      * o pino do meio de um TO-92 tem. */
-    double d = m->regras.trilha / 2.0 + m->regras.folga, passo = m->regras.grade;
-    double margem = d - sqrt(d * d - passo * passo / 2.0) + 0.002;
-    double base = d + margem;
+    double base = pb_inflacao(m);
     int i, face;
     for (i = 0; i < quantas; i++) {
         const PbForma *f = &formas[i];
@@ -298,6 +366,22 @@ int pb_define_planos(PbMapa *m, const PbPlano *planos, int quantos)
             for (c = 0; c < m->colunas; c++)
                 if (dentro(pb_x_de(m, c), pb_y_de(m, l), p->pontos, p->n_pontos))
                     r[l * m->colunas + c] = 1;
+        m->plano_raio[m->n_planos] = p->raio_largura;
+        {
+            /* O KiCad preenche ate a FOLGA DA ZONA do cobre alheio e apaga faixa
+             * mais estreita que a espessura minima. Sobra plano onde cabe um disco
+             * de espessura/2 a pelo menos a folga de tudo: centro a folga +
+             * espessura/2. A mascara (celula livre) garante so pb_inflacao; o que
+             * faltar vira erosao. Sem isto, com folga 0,5 e espessura 1,0, uma
+             * faixa de uma celula contava como plano e o KiCad a apagava - e o
+             * raio termico que caia nela (J3, interfone) ficava faminto. */
+            double zf = p->folga > m->regras.folga ? p->folga : m->regras.folga;
+            m->plano_alivio[m->n_planos] = p->alivio;
+            m->plano_espessura[m->n_planos] = p->espessura;
+            m->plano_folga[m->n_planos] = zf;
+            double falta = zf + p->espessura / 2.0 - pb_inflacao(m);
+            m->plano_erosao[m->n_planos] = falta > 0 ? (int)ceil(falta / m->regras.grade - 1e-9) : 0;
+        }
         m->plano_rede[m->n_planos] = p->rede;
         m->plano_face[m->n_planos] = p->face;
         m->plano_regiao[m->n_planos] = r;

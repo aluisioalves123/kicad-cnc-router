@@ -20,6 +20,10 @@ e soldar na bancada** — não em fábrica de PCB.
   face de baixo custa mais para as outras redes, e entre posições que fecham, ganha a que
   deixa mais plano inteiro ligado ao GND. Plano na face de cima ligado a pad seria solda do
   lado dos componentes: a janela avisa.
+- **Peças dos dois lados (opcional).** O posicionador pode virar peças para baixo. Cada peça
+  continua soldando de um lado só — o oposto ao corpo dela —, então a peça virada é ligada pela
+  face de cima. Corpos em lados opostos podem dividir a mesma área, desde que nenhum cubra os
+  pads (as soldas) do outro.
 - **Conector na periferia.** Conectores (J, P, CN, X ou footprint de conector) ficam na parte de
   fora do circuito, sem peça entre eles e a borda — sem serem empurrados contra a borda.
 - **Respeita o seu cadeado.** Peça travada no KiCad não se move. Furo de fixação também não.
@@ -71,8 +75,8 @@ No editor de placa, clique no ícone **Roteador CNC** na barra de ferramentas (o
 **Ferramentas → Plugins externos → Roteador CNC**).
 
 1. A janela mostra o que o plugin leu: regras, contorno, áreas proibidas, peças travadas.
-2. Escolha se ele pode **mover as peças**, se os **conectores vão para a periferia** e o **tempo
-   máximo** (120 s por padrão).
+2. Escolha se ele pode **mover as peças**, se os **conectores vão para a periferia**, se pode pôr
+   **peças dos dois lados** e o **tempo máximo** (120 s por padrão).
 3. **Posicionar e rotear.** Ele sorteia posições em paralelo e mostra o progresso ao vivo; para
    sozinho quando fecha a placa inteira. **Parar** encerra e fica com a melhor até ali.
 4. Confira o resultado: ligações abertas, peças que mudam, trilhas e vias novas, e uma

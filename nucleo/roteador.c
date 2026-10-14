@@ -193,7 +193,8 @@ static int alcanca(PbMapa *m, int rede, const int *origens, int n_origens)
         }
         if ((m->regras.salto_via <= 1
                 || (c % m->regras.salto_via == 0 && l % m->regras.salto_via == 0))
-                && m->bfs_visto[e ^ 1] != marca && cabe_via(m, c, l, rede)) {
+                && m->bfs_visto[e ^ 1] != marca && cabe_via(m, c, l, rede)
+                && pb_via_permitida(m, c, l, rede)) {
             m->bfs_visto[e ^ 1] = marca;
             m->bfs_fila[fim++] = e ^ 1;
         }
@@ -381,7 +382,7 @@ int pb_roteia(PbMapa *m, int rede,
         if (m->regras.salto_via <= 1
                 || (c % m->regras.salto_via == 0 && l % m->regras.salto_via == 0)) {
             int outra = 1 - face;
-            if (cabe_via(m, c, l, rede)) {
+            if (cabe_via(m, c, l, rede) && pb_via_permitida(m, c, l, rede)) {
                 int prox = ((l * cols + c) * 2 + outra) * PB_ESTADOS + PB_PARADO;
                 double ng = gcur + m->regras.custo_via;
                 if (ng < G_DE(prox) - 1e-4) {

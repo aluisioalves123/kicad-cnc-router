@@ -47,6 +47,11 @@ class Pad:
     dx: float = 0.0
     dy: float = 0.0
     giro_local: float = 0.0
+    # Angulo dos raios do alivio termico em relacao ao pad (o KiCad guarda no
+    # pad: 90 em oval e retangulo, 45 em redondo).
+    raio_termico: float = -1000.0
+    # 1 = a peca dona esta virada (corpo embaixo): este pad SOLDA EM CIMA.
+    lado: int = 0
 
     def raio_na_direcao(self, ang: float) -> float:
         """Meio-eixo do pad na direcao `ang` (radianos, global).
@@ -114,6 +119,11 @@ class Peca:
     corpo: list = field(default_factory=list)
     # Conector: o posicionador leva para a periferia (ver _eh_conector).
     conector: bool = False
+    # Lado do corpo: 0 = em cima (solda embaixo), 1 = virada (solda em cima).
+    # Peca virada guarda o referencial dela SEM o espelho - como estava antes de
+    # virar -, e o espelho (y local trocado de sinal, conferido contra o KiCad)
+    # e aplicado na hora de levar ao mundo.
+    lado: int = 0
     cx: float = 0.0
     cy: float = 0.0
     pads: list = field(default_factory=list)
@@ -145,6 +155,10 @@ class Plano:
     # componentes, o que o projeto proibe. So conta se a ligacao com pad estiver
     # desligada (ai ele so liga por via).
     liga_pads: bool = True
+    raio_largura: float = 0.0      # largura do raio do alivio termico, mm
+    folga: float = 0.0             # folga da zona ate cobre alheio, mm
+    espessura: float = 0.0         # o KiCad apaga faixa mais estreita que isto
+    alivio: float = 0.5            # vao do alivio termico entre pad e plano, mm
 
 
 @dataclass
@@ -267,6 +281,8 @@ def ler(board) -> Placa:
         caixa_fp = _caixa_do_courtyard(fp)
         ox, oy = mm(fp.GetPosition().x), mm(fp.GetPosition().y)
         giro = fp.GetOrientationDegrees()
+        lado = 1 if fp.IsFlipped() else 0
+        esp = -1.0 if lado else 1.0              # espelho do y local na virada
         # da caixa do mundo para o referencial da peca
         a = math.radians(giro)                   # mundo -> local: +giro
         wx = mm(caixa_fp.GetCenter().x) - ox
@@ -282,10 +298,11 @@ def ler(board) -> Placa:
             travada=bool(fp.IsLocked()),
             largura=larg, altura=alt,
             cx=wx * math.cos(a) - wy * math.sin(a),
-            cy=wx * math.sin(a) + wy * math.cos(a),
+            cy=esp * (wx * math.sin(a) + wy * math.cos(a)),
             corpo=[((x - ox) * math.cos(a) - (y - oy) * math.sin(a),
-                    (x - ox) * math.sin(a) + (y - oy) * math.cos(a))
+                    esp * ((x - ox) * math.sin(a) + (y - oy) * math.cos(a)))
                    for x, y in _pontos_do_courtyard(fp)],
+            lado=lado,
             conector=_eh_conector(fp),
         )
         p.pecas.append(peca)
@@ -309,8 +326,10 @@ def ler(board) -> Placa:
                 forma=FORMAS.get(pad.GetShape(), "outro"),
                 furo=mm(pad.GetDrillSizeX()),
                 passante=pad.GetAttribute() == pcbnew.PAD_ATTRIB_PTH,
-                dono=ref, dx=lx, dy=ly,
-                giro_local=pad.GetOrientationDegrees() - fp.GetOrientationDegrees(),
+                dono=ref, dx=lx, dy=esp * ly,
+                giro_local=esp * (pad.GetOrientationDegrees() - fp.GetOrientationDegrees()),
+                raio_termico=pad.GetThermalSpokeAngleDegrees(),
+                lado=lado,
             ))
 
     # Areas de regra da placa E as que vem dentro dos footprints. Faltavam as do
@@ -363,6 +382,10 @@ def ler(board) -> Placa:
                     poligono=[(mm(c.CPoint(k).x), mm(c.CPoint(k).y))
                               for k in range(c.PointCount())],
                     liga_pads=zona.GetPadConnection() != pcbnew.ZONE_CONNECTION_NONE,
+                    raio_largura=mm(zona.GetThermalReliefSpokeWidth()),
+                    folga=mm(zona.GetOwnClearance(camada)),
+                    espessura=mm(zona.GetMinThickness()),
+                    alivio=mm(zona.GetThermalReliefGap()),
                 ))
 
     for t in board.Tracks():

@@ -28,7 +28,7 @@
  * "15 pinos soltos" em toda configuracao. Demorei a desconfiar justamente porque
  * parecia certo. Binario incompativel tem de falhar na cara, nao mentir baixinho.
  */
-#define PB_ABI 12  /* 12: PbAlvo leva a forma do pad: chega em qualquer ponto dele */
+#define PB_ABI 16  /* 16: pecas dos dois lados (PbPeca.lado, PbAlvo.face) */
 /* (o corpo agora e o courtyard - mesma struct, mesma ABI) */
 
 /* ------------------------------------------------------------------ formas */
@@ -97,6 +97,11 @@ typedef struct {
     int face;
     int n_pontos;
     const double *pontos;
+    double raio_largura; /* largura do raio do alivio termico, mm (0 = um fio) */
+    double folga;        /* folga da zona ate cobre alheio, mm */
+    double espessura;    /* espessura minima do preenchimento, mm: o KiCad apaga o
+                          * que for mais estreito que isto */
+    double alivio;       /* vao do alivio termico entre o pad e o plano, mm */
 } PbPlano;
 
 /* Um pad a ligar: sempre pela face de baixo, que e a regra do projeto.
@@ -113,6 +118,11 @@ typedef struct {
     double x, y;         /* centro, mm */
     double larg, alt;    /* mm */
     double giro;         /* graus */
+    /* Angulo dos raios do alivio termico no MUNDO, graus (giro do pad + o angulo
+     * que o KiCad guarda no pad: 90 em oval e retangulo, 45 em redondo).
+     * Menor que -900 = nao se sabe: vale raio reto ou a 45. */
+    double raio_termico;
+    int face;            /* face da SOLDA deste pad: 1 = baixo, 0 = cima (peca virada) */
 } PbAlvo;
 
 typedef struct { int c1, l1, c2, l2, face, rede; } PbSeg;
@@ -132,6 +142,11 @@ typedef struct {
     int n_corpo;
     const double *corpo;
     int papel;           /* PB_PAPEL_* */
+    /* Lado do CORPO: 0 = em cima (solda embaixo), 1 = virada (corpo embaixo,
+     * solda em cima). Cada peca solda de um lado so - o oposto ao corpo. Peca
+     * virada e espelhada como o KiCad faz: y local trocado de sinal. */
+    int lado;
+    int pode_virar;      /* o posicionador pode trocar o lado */
 } PbPeca;
 
 /* Papel da peca para o posicionador. Conector vai para a PERIFERIA do circuito
@@ -149,6 +164,7 @@ typedef struct {
     int forma;           /* PB_CIRCULO / PB_CAPSULA / PB_RETANGULO */
     double dx, dy, giro_local;
     double larg, alt;
+    double raio_termico; /* angulo dos raios termicos em relacao ao PAD, graus */
 } PbPadC;
 
 /* Area de regra do KiCad. As proibicoes sao independentes: ha area que barra so

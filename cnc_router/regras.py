@@ -25,7 +25,8 @@ class Custos:
     """
 
     def __init__(self, curva=6.0, via=40.0, face_de_cima=1.15, plano=2.0,
-                 estimativa=1.0):
+                 estimativa=1.0, tentativas=6):
+        self.tentativas = tentativas      # passadas de rip-up por roteamento
         self.curva = curva
         self.via = via
         # Atravessar o plano de outra rede pela face de baixo: cada trilha ali

@@ -73,8 +73,16 @@ static void pos_do_pad(const PbPeca *pecas, const PbPadC *pad, double *x, double
 {
     const PbPeca *p = &pecas[pad->peca];
     double a = -p->giro * M_PI / 180.0, ca = cos(a), sa = sin(a);   /* local -> mundo */
-    *x = p->x + pad->dx * ca - pad->dy * sa;
-    *y = p->y + pad->dx * sa + pad->dy * ca;
+    double dy = p->lado ? -pad->dy : pad->dy;      /* virada: espelho como o KiCad */
+    *x = p->x + pad->dx * ca - dy * sa;
+    *y = p->y + pad->dx * sa + dy * ca;
+}
+
+/* Giro do pad no mundo: na peca virada, o giro proprio do pad troca de sinal. */
+static double giro_do_pad(const PbPeca *pecas, const PbPadC *pad)
+{
+    const PbPeca *p = &pecas[pad->peca];
+    return p->giro + (p->lado ? -pad->giro_local : pad->giro_local);
 }
 
 /* ------------------------------------------------------------------ custo */
@@ -199,10 +207,11 @@ static void corpos_no_mundo(const Ctx *c)
         const double *l = &c->casco[i * MAX_CASCO * 2];
         double *w = &c->mundo[i * MAX_CASCO * 2], *bx = &c->caixas[i * 4];
         double a = -p->giro * M_PI / 180.0, ca = cos(a), sa = sin(a);   /* local -> mundo */
+        double esp = p->lado ? -1.0 : 1.0;          /* virada: espelho do y local */
         bx[0] = bx[1] = 1e300; bx[2] = bx[3] = -1e300;
         for (k = 0; k < c->n_casco[i]; k++) {
-            w[k * 2] = p->x + l[k * 2] * ca - l[k * 2 + 1] * sa;
-            w[k * 2 + 1] = p->y + l[k * 2] * sa + l[k * 2 + 1] * ca;
+            w[k * 2] = p->x + l[k * 2] * ca - esp * l[k * 2 + 1] * sa;
+            w[k * 2 + 1] = p->y + l[k * 2] * sa + esp * l[k * 2 + 1] * ca;
         }
         infla(w, c->n_casco[i], VAO_CORPO / 2.0);
         for (k = 0; k < c->n_casco[i]; k++) {
@@ -261,10 +270,10 @@ static double area_comum(const double *sujeito, int ns, const double *convexo, i
 /* Quanto o pad avanca na direcao `ang` (radianos, mundo). A pergunta nunca e "qual
  * o tamanho do pad", e sim quanto ele avanca NA DIRECAO do vizinho: num oval de
  * 1,8 x 3 virado para o pino ao lado, usar o eixo maior erra o vao em mais de 1 mm. */
-static double raio_na_direcao(const PbPadC *pad, double giro_peca, double ang)
+static double raio_na_direcao(const PbPadC *pad, double giro_pad, double ang)
 {
     double a = pad->larg / 2.0, b = pad->alt / 2.0;
-    double t = ang + (giro_peca + pad->giro_local) * M_PI / 180.0;   /* mundo -> local */
+    double t = ang + giro_pad * M_PI / 180.0;                      /* mundo -> local */
     double ct = fabs(cos(t)), st = fabs(sin(t));
     if (pad->forma == PB_CIRCULO) return a;
     if (pad->forma == PB_CAPSULA) {
@@ -297,8 +306,8 @@ static double pads_colados(const Ctx *c)
             pos_do_pad(c->pecas, pb, &xb, &yb);
             d = hypot(xb - xa, yb - ya);
             ang = atan2(yb - ya, xb - xa);
-            falta = raio_na_direcao(pa, c->pecas[pa->peca].giro, ang)
-                  + raio_na_direcao(pb, c->pecas[pb->peca].giro, ang + M_PI)
+            falta = raio_na_direcao(pa, giro_do_pad(c->pecas, pa), ang)
+                  + raio_na_direcao(pb, giro_do_pad(c->pecas, pb), ang + M_PI)
                   + c->r->folga - d;
             /* mesma rede pode encostar o cobre, mas aqui sao pecas diferentes: o
                corpo de uma nao cabe em cima do pad da outra */
@@ -360,6 +369,32 @@ static double espalhamento(const Ctx *c)
  * diferentes, nao entre pecas. E so par em que ao menos uma pode se mexer -
  * penalidade sobre peca presa e constante que o otimizador nao melhora, e
  * constante grande distorce a temperatura, que sai do proprio custo. */
+/* Quanto os pads da peca `k` entram no corpo da peca `i`, somado em mm (a
+ * penetracao de cada pad, contando o raio dele). */
+static double pads_sob_corpo(const Ctx *c, int i, int k)
+{
+    const double *h = &c->mundo[i * MAX_CASCO * 2];
+    int n = c->n_casco[i], j, e;
+    double sinal = area_com_sinal(h, n) >= 0 ? 1.0 : -1.0, total = 0.0;
+    for (j = 0; j < c->n_pads; j++) {
+        const PbPadC *pad = &c->pads[j];
+        double x, y, r, menor = 1e300;
+        if (pad->peca != k) continue;
+        pos_do_pad(c->pecas, pad, &x, &y);
+        r = (pad->larg > pad->alt ? pad->larg : pad->alt) / 2.0;
+        for (e = 0; e < n; e++) {
+            const double *a = &h[e * 2], *b = &h[((e + 1) % n) * 2];
+            double ex = b[0] - a[0], ey = b[1] - a[1], len = sqrt(ex * ex + ey * ey);
+            double dist;
+            if (len < 1e-12) continue;
+            dist = sinal * (ex * (y - a[1]) - ey * (x - a[0])) / len;   /* + = dentro */
+            if (dist < menor) menor = dist;
+        }
+        if (menor > -r) total += menor + r;
+    }
+    return total;
+}
+
 static double sobreposicao(const Ctx *c)
 {
     double total = 0.0;
@@ -372,6 +407,13 @@ static double sobreposicao(const Ctx *c)
             if (!c->pecas[i].movel && !c->pecas[k].movel) continue;
             caixa(c, k, &c0, &d0, &c1, &d1);
             if (a1 <= c0 || c1 <= a0 || b1 <= d0 || d1 <= b0) continue;   /* longe */
+            if (c->pecas[i].lado != c->pecas[k].lado) {
+                /* Lados opostos: os corpos podem dividir a mesma area, mas o
+                 * terminal de uma peca THT atravessa e e soldado do outro lado -
+                 * nenhum corpo pode cobrir pad (solda) da outra. */
+                total += pads_sob_corpo(c, i, k) + pads_sob_corpo(c, k, i);
+                continue;
+            }
             area = area_comum(&c->mundo[i * MAX_CASCO * 2], c->n_casco[i],
                               &c->mundo[k * MAX_CASCO * 2], c->n_casco[k]);
             if (area > TOLERA_SOBREPOSICAO) total += area;
@@ -465,7 +507,7 @@ static double pads_na_borda(const Ctx *c)
         double x, y, g, f;
         if (!c->pecas[pad->peca].movel) continue;
         pos_do_pad(c->pecas, pad, &x, &y);
-        g = c->pecas[pad->peca].giro;
+        g = giro_do_pad(c->pecas, pad);
         f = (x - raio_na_direcao(pad, g, M_PI)) - (c->bx0 + c->r->borda);
         if (f < 0) total -= f;
         f = (c->bx1 - c->r->borda) - (x + raio_na_direcao(pad, g, 0.0));
@@ -553,11 +595,15 @@ static void recoze(Ctx *c, int passos, unsigned long long *s)
         int b = -1;
         double sort = sorteio(s), novo, d;
 
-        if (sort < 0.70) {
+        if (sort < 0.64) {
             c->pecas[a].x = arredonda(c->pecas[a].x + (sorteio(s) * 2 - 1) * alcance);
             c->pecas[a].y = arredonda(c->pecas[a].y + (sorteio(s) * 2 - 1) * alcance);
         } else if (sort < 0.90) {
-            c->pecas[a].giro = 90.0 * (double)(proximo(s) % 4);
+            /* gira; e, se o usuario deixou, as vezes vira a peca de lado */
+            if (c->pecas[a].pode_virar && sorteio(s) < 0.35)
+                c->pecas[a].lado = !c->pecas[a].lado;
+            else
+                c->pecas[a].giro = 90.0 * (double)(proximo(s) % 4);
         } else {
             double tx, ty;
             b = moveis[proximo(s) % (unsigned long long)n_moveis];
@@ -598,9 +644,10 @@ static void recoze(Ctx *c, int passos, unsigned long long *s)
  * e preenche vias/comprimento para desempate. */
 static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
                  const double *contorno, int n_contorno,
-                 int *vias_out, double *fio_out, int *falhas, double *perda_out)
+                 int *vias_out, double *fio_out, int *falhas, double *perda_out,
+                 PbMapa **reuso)
 {
-    PbMapa *m = pb_cria(c->r, x0, y0, larg, alt);
+    PbMapa *m;
     PbForma *formas;
     PbAlvo *alvos;
     PbSeg *segs;
@@ -609,6 +656,14 @@ static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
     int nf = 0, na = 0, i, ns = 0, nv = 0, nab = 0;
     double fio = 0.0;
 
+    /* o mapa do nucleo e reaproveitado de uma posicao para a outra */
+    if (reuso && *reuso) {
+        m = *reuso;
+        pb_reinicia(m);
+    } else {
+        m = pb_cria(c->r, x0, y0, larg, alt);
+        if (reuso) *reuso = m;
+    }
     if (!m) return 1 << 20;
     formas = (PbForma *)calloc((size_t)(c->n_pads * 2 + c->n_proibidas + 1), sizeof(PbForma));
     alvos = (PbAlvo *)calloc((size_t)(c->n_pads > 0 ? c->n_pads : 1), sizeof(PbAlvo));
@@ -630,17 +685,19 @@ static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
     }
     for (i = 0; i < c->n_pads; i++) {
         const PbPadC *pad = &c->pads[i];
-        double x, y, giro = c->pecas[pad->peca].giro + pad->giro_local;
+        double x, y, giro = giro_do_pad(c->pecas, pad);
+        int virada = c->pecas[pad->peca].lado;
         pos_do_pad(c->pecas, pad, &x, &y);
-        /* embaixo o pad e da rede dele: a trilha chega */
+        /* na face da SOLDA o pad e da rede dele: a trilha chega */
         formas[nf].forma = pad->forma; formas[nf].rede = pad->rede;
-        formas[nf].faces = PB_BAIXO;
+        formas[nf].faces = virada ? PB_CIMA : PB_BAIXO;
         formas[nf].x = x; formas[nf].y = y;
         formas[nf].larg = pad->larg; formas[nf].alt = pad->alt; formas[nf].giro = giro;
         nf++;
-        /* em cima e intransponivel ATE para a propria rede: e a regra do projeto */
+        /* do lado do corpo e intransponivel ATE para a propria rede: solda de um
+         * lado so, que e a regra do projeto */
         formas[nf] = formas[nf - 1];
-        formas[nf].rede = PB_DE_NINGUEM; formas[nf].faces = PB_CIMA;
+        formas[nf].rede = PB_DE_NINGUEM; formas[nf].faces = virada ? PB_BAIXO : PB_CIMA;
         nf++;
         if (pad->rede) {
             alvos[na].rede = pad->rede;
@@ -650,6 +707,8 @@ static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
             alvos[na].x = x; alvos[na].y = y;
             alvos[na].larg = pad->larg; alvos[na].alt = pad->alt;
             alvos[na].giro = giro;
+            alvos[na].raio_termico = giro + pad->raio_termico;
+            alvos[na].face = virada ? 0 : 1;
             na++;
         }
     }
@@ -675,7 +734,7 @@ static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
 
     free(segs); free(vias); free(abertas); free(formas); free(alvos);
     *perda_out = pb_plano_perdido(m);    /* antes de destruir o mapa */
-    pb_destroi(m);
+    if (!reuso) pb_destroi(m);
     *vias_out = nv;
     *fio_out = fio;
     return nab;
@@ -807,6 +866,7 @@ static void trabalha(void *arg)
     PbPeca *pecas = (PbPeca *)malloc((size_t)c.n_pecas * sizeof(PbPeca));
     double *peso = (double *)malloc((size_t)nr * sizeof(double));
     int *falhas = (int *)malloc((size_t)nr * sizeof(int));
+    PbMapa *mapa = NULL;          /* deste nucleo, reaproveitado (ver julga) */
     c.pecas = pecas;
     c.peso = peso;
     c.mundo = (double *)malloc((size_t)c.n_pecas * MAX_CASCO * 2 * sizeof(double));
@@ -844,7 +904,7 @@ static void trabalha(void *arg)
         if (perde) continue;     /* nem fechando tudo ganharia: nao vale rotear */
         memset(falhas, 0, (size_t)nr * sizeof(int));
         ab = julga(&c, g->x0, g->y0, g->larg, g->alt, g->contorno, g->n_contorno,
-                   &nv, &fio, falhas, &perda);
+                   &nv, &fio, falhas, &perda, &mapa);
         if (g->placar->parar) break;    /* roteamento interrompido: nao vale */
 
         tranca(&g->trava);
@@ -881,6 +941,7 @@ static void trabalha(void *arg)
     }
 
     free(pecas); free(peso); free(falhas); free(c.mundo); free(c.caixas);
+    pb_destroi(mapa);
 }
 
 /* ------------------------------------------------------------------ api */
@@ -898,12 +959,19 @@ int pb_posiciona(const PbRegras *r,
 {
     Sorteio g;
     Ctx *c = &g.base;
+    PbRegras juiz;
     Fio *fios;
     int i, n_fios = 0, nr, *falhas, *n_casco;
     double t0 = agora();
 
     memset(&g, 0, sizeof(g));
-    c->r = r;
+    /* O juiz roteia CENTENAS de posicoes: so precisa ordenar uma contra a outra,
+     * nao entregar o melhor roteamento. Vai com busca mais direta (estimativa
+     * x2) e ate 3 passadas; a vencedora e roteada com capricho depois. */
+    juiz = *r;
+    if (juiz.peso_estimativa < 2.0) juiz.peso_estimativa = 2.0;
+    if (juiz.tentativas > 3) juiz.tentativas = 3;
+    c->r = &juiz;
     c->proibidas = proibidas; c->n_proibidas = n_proibidas;
     c->planos = planos; c->n_planos = n_planos;
     c->parar = &placar->parar;
@@ -985,7 +1053,7 @@ int pb_posiciona(const PbRegras *r,
     /* candidato 0: a posicao de entrada, intocada - e as redes dela que nao
      * fecham ja comecam com peso */
     g.melhor_ab = julga(c, x0, y0, larg, alt, contorno, n_contorno,
-                        &g.melhor_vias, &g.melhor_fio, falhas, &g.melhor_perda);
+                        &g.melhor_vias, &g.melhor_fio, falhas, &g.melhor_perda, NULL);
     placar->plano_perdido = g.melhor_perda;
     corpos_no_mundo(c);
     g.melhor_faixa = faixa_conectores(c);

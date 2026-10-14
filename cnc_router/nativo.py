@@ -12,7 +12,7 @@ import ctypes
 import os
 import sys
 
-ABI_ESPERADA = 12
+ABI_ESPERADA = 16
 
 CIRCULO, CAPSULA, RETANGULO, POLIGONO, FORA_DE, SEGMENTO = 0, 1, 2, 3, 4, 5
 CIMA, BAIXO, AMBAS = 1, 2, 3
@@ -50,7 +50,8 @@ class PbAlvo(ctypes.Structure):
                 ("forma", ctypes.c_int),
                 ("x", ctypes.c_double), ("y", ctypes.c_double),
                 ("larg", ctypes.c_double), ("alt", ctypes.c_double),
-                ("giro", ctypes.c_double)]
+                ("giro", ctypes.c_double), ("raio_termico", ctypes.c_double),
+                ("face", ctypes.c_int)]
 
 
 class PbSeg(ctypes.Structure):
@@ -73,7 +74,8 @@ class PbPeca(ctypes.Structure):
                 ("alt", ctypes.c_double), ("cx", ctypes.c_double),
                 ("cy", ctypes.c_double), ("movel", ctypes.c_int),
                 ("n_corpo", ctypes.c_int), ("corpo", ctypes.POINTER(ctypes.c_double)),
-                ("papel", ctypes.c_int)]
+                ("papel", ctypes.c_int), ("lado", ctypes.c_int),
+                ("pode_virar", ctypes.c_int)]
 
 
 class PbPadC(ctypes.Structure):
@@ -81,12 +83,15 @@ class PbPadC(ctypes.Structure):
                 ("forma", ctypes.c_int),
                 ("dx", ctypes.c_double), ("dy", ctypes.c_double),
                 ("giro_local", ctypes.c_double),
-                ("larg", ctypes.c_double), ("alt", ctypes.c_double)]
+                ("larg", ctypes.c_double), ("alt", ctypes.c_double),
+                ("raio_termico", ctypes.c_double)]
 
 
 class PbPlano(ctypes.Structure):
     _fields_ = [("rede", ctypes.c_int), ("face", ctypes.c_int),
-                ("n_pontos", ctypes.c_int), ("pontos", ctypes.POINTER(ctypes.c_double))]
+                ("n_pontos", ctypes.c_int), ("pontos", ctypes.POINTER(ctypes.c_double)),
+                ("raio_largura", ctypes.c_double), ("folga", ctypes.c_double),
+                ("espessura", ctypes.c_double), ("alivio", ctypes.c_double)]
 
 
 class PbProibida(ctypes.Structure):
@@ -196,8 +201,10 @@ def lib():
 
 
 def regras_para_c(regras, custos=None, salto_via=5, orcamento=3000000,
-                  tentativas=6) -> PbRegras:
+                  tentativas=None) -> PbRegras:
     c = custos
+    if tentativas is None:
+        tentativas = getattr(c, "tentativas", 6)
     return PbRegras(
         trilha=regras.trilha, folga=regras.folga, grade=regras.grade,
         via_ilha=regras.via_ilha, broca=regras.broca,
@@ -223,7 +230,9 @@ def planos_para_c(planos):
         for k, (x, y) in enumerate(z.poligono):
             pts[k * 2], pts[k * 2 + 1] = x, y
         vetor._pontos.append(pts)
-        vetor[i] = PbPlano(rede=z.rede, face=1, n_pontos=len(z.poligono), pontos=pts)
+        vetor[i] = PbPlano(rede=z.rede, face=1, n_pontos=len(z.poligono), pontos=pts,
+                           raio_largura=z.raio_largura, folga=z.folga,
+                           espessura=z.espessura, alivio=z.alivio)
     vetor._n = len(uteis)
     return vetor
 
@@ -292,7 +301,9 @@ class Mapa:
         # alvo = (rede, c, l) so com o centro, ou (rede, c, l, forma, x, y, larg,
         # alt, giro) com a forma do pad: a trilha chega em qualquer ponto dele
         va = (PbAlvo * len(alvos))(*[
-            PbAlvo(*a) if len(a) == 9 else PbAlvo(rede=a[0], c=a[1], l=a[2])
+            PbAlvo(*a) if len(a) >= 11
+            else PbAlvo(*a, face=1) if len(a) >= 9
+            else PbAlvo(rede=a[0], c=a[1], l=a[2], raio_termico=-1000.0, face=1)
             for a in alvos])
         segs = (PbSeg * max_segs)()
         vias = (PbViaOut * max_vias)()

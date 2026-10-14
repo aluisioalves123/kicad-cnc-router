@@ -78,15 +78,18 @@ def monta_mapa(placa, regras, custos: Custos = None):
 
     for pad in placa.pads:
         f = FORMA.get(pad.forma, nativo.RETANGULO)
-        # Embaixo o pad e da rede dele: a trilha da mesma rede pode chegar.
-        formas.append(nativo.PbForma(forma=f, rede=pad.rede, faces=nativo.BAIXO,
+        solda = nativo.CIMA if pad.lado else nativo.BAIXO
+        corpo = nativo.BAIXO if pad.lado else nativo.CIMA
+        # Na face da SOLDA (a oposta ao corpo da peca) o pad e da rede dele: a
+        # trilha da mesma rede pode chegar.
+        formas.append(nativo.PbForma(forma=f, rede=pad.rede, faces=solda,
                                      x=pad.x, y=pad.y, larg=pad.largura,
                                      alt=pad.altura, giro=pad.giro))
-        # Em cima ele e intransponivel ATE para a propria rede: cobre de cima
-        # encostando no anel so vira ligacao depois de soldar por cima, que e
+        # Do lado do corpo ele e intransponivel ATE para a propria rede: cobre
+        # encostando ali so vira ligacao soldando do lado do corpo, que e
         # exatamente o que este projeto existe para evitar.
         formas.append(nativo.PbForma(forma=f, rede=nativo.DE_NINGUEM,
-                                     faces=nativo.CIMA,
+                                     faces=corpo,
                                      x=pad.x, y=pad.y, larg=pad.largura,
                                      alt=pad.altura, giro=pad.giro))
 
@@ -101,17 +104,39 @@ def monta_mapa(placa, regras, custos: Custos = None):
     return m
 
 
-def roteia(placa, regras, custos: Custos = None) -> Resultado:
+def _roteia(placa, regras, custos):
     m = monta_mapa(placa, regras, custos)
     alvos = [(pad.rede,) + m.para_grade(pad.x, pad.y)
              + (FORMA.get(pad.forma, nativo.RETANGULO), pad.x, pad.y,
-                pad.largura, pad.altura, pad.giro)
+                pad.largura, pad.altura, pad.giro,
+                pad.giro + pad.raio_termico if pad.raio_termico > -900 else -1000.0,
+                0 if pad.lado else 1)
              for pad in placa.pads if pad.rede]
     return Resultado(m.roteia_tudo(alvos), m, placa)
 
 
+def roteia(placa, regras, custos: Custos = None) -> Resultado:
+    """Roteia com capricho. Se sobrar ligacao aberta, tenta tambem do jeito que o
+    juiz do posicionador roteia (busca mais direta, ate 3 passadas) e fica o
+    melhor: foi assim que o juiz viu a posicao fechar, e o capricho nao pode
+    entregar menos que isso."""
+    custos = custos or Custos()
+    res = _roteia(placa, regras, custos)
+    if res.abertas:
+        leve = Custos(curva=custos.curva, via=custos.via,
+                      face_de_cima=custos.face_de_cima, plano=custos.plano,
+                      estimativa=max(2.0, custos.estimativa),
+                      tentativas=min(3, custos.tentativas))
+        outro = _roteia(placa, regras, leve)
+        if ((len(outro.abertas), outro.plano_perdido, len(outro.vias))
+                < (len(res.abertas), res.plano_perdido, len(res.vias))):
+            res = outro
+    return res
+
+
 def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=1,
-              nucleos=0, custos=None, placar=None, conectores_na_periferia=True):
+              nucleos=0, custos=None, placar=None, conectores_na_periferia=True,
+              dois_lados=False):
     """Posiciona no C, com o roteador como juiz. Escreve a vencedora na placa.
 
     Sorteia em todos os nucleos ate fechar a placa inteira ou acabar `segundos`
@@ -139,6 +164,8 @@ def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=
         nativo.PbPeca(x=p.x, y=p.y, giro=p.giro, larg=p.largura, alt=p.altura,
                       cx=p.cx, cy=p.cy,
                       movel=int(not p.travada and p.ref in com_rede),
+                      lado=p.lado,
+                      pode_virar=int(dois_lados and not p.travada and p.ref in com_rede),
                       n_corpo=len(p.corpo), corpo=corpos[i],
                       papel=(nativo.PAPEL_MECANICA if p.ref not in com_rede
                              else nativo.PAPEL_CONECTOR
@@ -149,6 +176,7 @@ def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=
         nativo.PbPadC(peca=indice[pad.dono], rede=pad.rede,
                       forma=FORMA.get(pad.forma, nativo.RETANGULO),
                       dx=pad.dx, dy=pad.dy, giro_local=pad.giro_local,
+                      raio_termico=pad.raio_termico,
                       larg=pad.largura, alt=pad.altura)
         for pad in placa.pads])
 
@@ -191,15 +219,17 @@ def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=
 
     # a vencedora volta para a placa: pecas e, por consequencia, pads
     for i, p in enumerate(placa.pecas):
-        p.x, p.y, p.giro = pecas[i].x, pecas[i].y, pecas[i].giro
+        p.x, p.y, p.giro, p.lado = pecas[i].x, pecas[i].y, pecas[i].giro, pecas[i].lado
     import math
     por_ref = {p.ref: p for p in placa.pecas}
     for pad in placa.pads:
         p = por_ref[pad.dono]
         a = math.radians(-p.giro)    # local -> mundo: -giro (convencao em placa.py)
-        pad.x = p.x + pad.dx * math.cos(a) - pad.dy * math.sin(a)
-        pad.y = p.y + pad.dx * math.sin(a) + pad.dy * math.cos(a)
-        pad.giro = p.giro + pad.giro_local
+        dy = -pad.dy if p.lado else pad.dy          # virada: espelho do y local
+        pad.x = p.x + pad.dx * math.cos(a) - dy * math.sin(a)
+        pad.y = p.y + pad.dx * math.sin(a) + dy * math.cos(a)
+        pad.giro = p.giro + (-pad.giro_local if p.lado else pad.giro_local)
+        pad.lado = p.lado
     for z in placa.proibidas:
         if z.dono in moveis:
             p = por_ref[z.dono]

@@ -38,6 +38,14 @@ struct PbMapa {
     int plano_rede[PB_MAX_PLANOS];
     int plano_face[PB_MAX_PLANOS];
     unsigned char *plano_regiao[PB_MAX_PLANOS];
+    double plano_raio[PB_MAX_PLANOS];    /* largura do raio termico, mm */
+    /* Quanto a mascara do plano (celula livre no mapa inflado) ainda tem de
+     * encolher, em celulas, para so sobrar o que o KiCad de fato preenche - ver
+     * pb_define_planos. */
+    int plano_erosao[PB_MAX_PLANOS];
+    double plano_alivio[PB_MAX_PLANOS];  /* vao do alivio termico, mm */
+    double plano_espessura[PB_MAX_PLANOS];
+    double plano_folga[PB_MAX_PLANOS];   /* folga efetiva da zona, mm */
 
     /* Varredura de alcance (ver alcanca() no roteador): carimbo por estado
      * celula x face, como o do A*, e a fila. */
@@ -54,6 +62,13 @@ struct PbMapa {
      * de pad a cada passo. */
     unsigned *alvo_marca;
 
+    /* Vias ja feitas neste mapa (coluna, linha, rede). Um caminho pode PASSAR
+     * por via da propria rede, mas nao pode criar outra colada nela: duas
+     * ligacoes de GND poem a via no mesmo ponto e o KiCad acusa furos
+     * sobrepostos (holes_co_located). */
+    int *via_lista;
+    int n_via_lista, cap_via_lista;
+
     float *g;
     int *veio;
     unsigned *carimbo;   /* 2*busca: aberto nesta busca; 2*busca+1: fechado */
@@ -61,5 +76,25 @@ struct PbMapa {
 };
 
 int pb_livre_para(const PbMapa *m, int c, int l, int face, int rede);
+
+/* Esvazia o mapa para reuso (mesma placa, mesmo tamanho): o posicionador roteia
+ * centenas de posicoes, e alocar e preencher dezenas de MB por posicao, em
+ * varios nucleos ao mesmo tempo, era o que travava o sorteio em placa grande. */
+void pb_reinicia(PbMapa *m);
+
+/* Pode haver via desta rede em (c, l)? Nao se ja houver outra da mesma rede a
+ * menos de broca + folga - a nao ser exatamente no mesmo ponto (reuso). */
+int pb_via_permitida(const PbMapa *m, int c, int l, int rede);
+
+/* Registra uma via no mapa (ignora a repetida). */
+void pb_anota_via(PbMapa *m, int c, int l, int rede);
+
+/* Quanto cada obstaculo e inflado no mapa, mm: meia trilha + folga + a margem
+ * da grade. Celula livre = centro a pelo menos isto de qualquer cobre alheio. */
+double pb_inflacao(const PbMapa *m);
+
+/* Celula (indice linha*colunas+coluna) e plano DE VERDADE: livre, dentro da
+ * zona e longe o bastante de cobre alheio para sobreviver a espessura minima. */
+int pb_e_plano(const PbMapa *m, int ip, int cel);
 
 #endif

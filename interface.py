@@ -58,6 +58,11 @@ class Janela(wx.Dialog):
         self.c_conectores = wx.CheckBox(painel, label="Conectores na periferia")
         self.c_conectores.SetValue(True)
         opcoes.Add(self.c_conectores, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 16)
+        self.c_lados = wx.CheckBox(painel, label="Pecas dos dois lados")
+        self.c_lados.SetToolTip("Pode virar pecas para baixo. Cada peca continua "
+                                "soldando de um lado so: o oposto ao corpo dela.")
+        self.c_lados.SetValue(False)
+        opcoes.Add(self.c_lados, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 16)
         opcoes.Add(wx.StaticText(painel, label="Tempo maximo:"), 0,
                    wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 4)
         self.s_tempo = wx.SpinCtrl(painel, min=5, max=3600, initial=120,
@@ -103,6 +108,7 @@ class Janela(wx.Dialog):
         self.b_rodar.Enable(not rodando)
         self.c_mover.Enable(not rodando)
         self.c_conectores.Enable(not rodando)
+        self.c_lados.Enable(not rodando)
         self.s_tempo.Enable(not rodando)
         self.b_parar.Enable(rodando)
         self.b_aplicar.Enable(not rodando and self.resultado is not None)
@@ -127,6 +133,7 @@ class Janela(wx.Dialog):
         self.inicio = time.time()
         mover = self.c_mover.GetValue()
         self.periferia = self.c_conectores.GetValue()
+        self.dois_lados = self.c_lados.GetValue()
         segundos = float(self.s_tempo.GetValue())
         self.prazo = segundos if mover else 0.0
         self.status.SetLabel("preparando...")
@@ -142,7 +149,8 @@ class Janela(wx.Dialog):
         try:
             if mover:
                 motor.posiciona(p, self.regras, segundos=segundos, placar=self.placar,
-                                conectores_na_periferia=self.periferia)
+                                conectores_na_periferia=self.periferia,
+                                dois_lados=self.dois_lados)
             self.fase = "final"             # daqui em diante nao ha o que parar
             res = motor.roteia(p, self.regras)
             problemas = confere(p, self.regras, res)

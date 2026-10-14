@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 
-from .regras import CIMA
+from .regras import BAIXO, CIMA
 
 
 def _dist_segmentos(a, b) -> float:
@@ -94,15 +94,17 @@ def confere(placa, regras, resultado) -> list:
     # ligacao depois de soldar por cima, que e o que se quer eliminar.
     encostam = []
     for (x1, y1, x2, y2, face, rede) in resultado.trilhas:
-        if face != CIMA:
-            continue
         for pad in placa.pads:
+            # a face da solda e a oposta ao corpo: embaixo, ou em cima se a peca
+            # esta virada. Cobre na OUTRA face encostando no pad e o proibido.
+            if face == (CIMA if pad.lado else BAIXO):
+                continue
             qx, qy = _ponto_mais_perto(pad.x, pad.y, x1, y1, x2, y2)
             d = math.hypot(qx - pad.x, qy - pad.y)
             if d < _raio_rumo_a(pad, qx, qy) + meia - 1e-6:
                 encostam.append((pad.ref, rede))
     if encostam:
-        problemas.append("%d encostao(oes) de trilha de CIMA em pad: %s"
+        problemas.append("%d encostao(oes) de trilha em pad pelo lado do corpo: %s"
                          % (len(encostam), sorted({e[0] for e in encostam})[:6]))
 
     # ---------------------------------------------------------------- folga

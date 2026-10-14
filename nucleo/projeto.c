@@ -67,9 +67,17 @@ static void em_segmentos(const int *caminho, int n, int rede,
                 s->c2 = an[0]; s->l2 = an[1];
                 s->face = in[2]; s->rede = rede;
             }
-            if (*n_vias < max_vias) {
-                PbViaOut *v = &vias[(*n_vias)++];
-                v->c = an[0]; v->l = an[1]; v->rede = rede;
+            {
+                int k, ja = 0;
+                for (k = 0; k < *n_vias; k++)
+                    if (vias[k].c == an[0] && vias[k].l == an[1] && vias[k].rede == rede) {
+                        ja = 1;          /* passou por uma via que ja existe */
+                        break;
+                    }
+                if (!ja && *n_vias < max_vias) {
+                    PbViaOut *v = &vias[(*n_vias)++];
+                    v->c = an[0]; v->l = an[1]; v->rede = rede;
+                }
             }
             ic = i;
         } else if (mudou_dir) {
@@ -121,6 +129,7 @@ static void pinta_trecho(PbMapa *m, const PbSeg *segs, int de, int ate,
         f.x = pb_x_de(m, vias[i].c); f.y = pb_y_de(m, vias[i].l);
         f.larg = m->regras.via_ilha;
         pb_pinta(m, &f, 1);
+        pb_anota_via(m, vias[i].c, vias[i].l, vias[i].rede);
     }
     (void)folga;
 }
@@ -139,7 +148,7 @@ static int celulas_do_pad(const PbMapa *m, const PbAlvo *a, int rede,
     int l0 = pb_linha_de(m, a->y - raio), l1 = pb_linha_de(m, a->y + raio);
     int c, l, n = 0;
     if (a->larg <= 0.0 || a->alt <= 0.0) {
-        saida[0] = a->c; saida[1] = a->l; saida[2] = 1;
+        saida[0] = a->c; saida[1] = a->l; saida[2] = a->face;
         return 1;
     }
     for (l = l0; l <= l1; l++)
@@ -158,12 +167,12 @@ static int celulas_do_pad(const PbMapa *m, const PbAlvo *a, int rede,
             } else {
                 dentro = fabs(lx) <= hx && fabs(ly) <= hy;
             }
-            if (!dentro || !pb_livre_para(m, c, l, 1, rede)) continue;
-            saida[n * 3] = c; saida[n * 3 + 1] = l; saida[n * 3 + 2] = 1;
+            if (!dentro || !pb_livre_para(m, c, l, a->face, rede)) continue;
+            saida[n * 3] = c; saida[n * 3 + 1] = l; saida[n * 3 + 2] = a->face;
             n++;
         }
     if (n == 0) {               /* nada cabe: o centro, e o A* responde que nao da */
-        saida[0] = a->c; saida[1] = a->l; saida[2] = 1;
+        saida[0] = a->c; saida[1] = a->l; saida[2] = a->face;
         n = 1;
     }
     return n;
@@ -173,6 +182,7 @@ static int celulas_do_pad(const PbMapa *m, const PbAlvo *a, int rede,
 
 /* ------------------------------------------------------------------ plano */
 
+#define RAIZ2_P 1.41421356237309504880
 static const int DC8[8] = { 1, 1, 0, -1, -1, -1,  0,  1 };   /* par = reto, impar = 45 */
 static const int DL8[8] = { 0, 1, 1,  1,  0, -1, -1, -1 };
 
@@ -196,11 +206,54 @@ static void une(int *pai, int a, int b)
     if (a != b) pai[b] = a;
 }
 
+/* Quanto o pad avanca na direcao `ang` (radianos, mundo, Y para baixo). */
+static double meio_eixo(const PbAlvo *a, double ang)
+{
+    double hx = a->larg / 2.0, hy = a->alt / 2.0;
+    double t = ang + a->giro * M_PI / 180.0;           /* mundo -> local */
+    double ct = fabs(cos(t)), st = fabs(sin(t));
+    if (a->forma == PB_CIRCULO) return hx;
+    if (a->forma == PB_CAPSULA) {
+        double r = hx < hy ? hx : hy;
+        return hx >= hy ? ct * (hx - r) + r : st * (hy - r) + r;
+    }
+    {
+        double rx = ct > 1e-12 ? hx / ct : 1e30, ry = st > 1e-12 ? hy / st : 1e30;
+        return rx < ry ? rx : ry;
+    }
+}
+
 typedef struct {
     int *rotulo;     /* por celula: pedaco do plano, -1 = sem plano */
     int n_pedacos;
     int *pai;        /* pedacos 0..n-1 e pads n..n+r->n-1, unidos se ligam */
 } Pedacos;
+
+/* Ha plano preenchido no ponto (x, y) mm? O nucleo erodido (pb_e_plano) sao
+ * centros de disco de espessura/2 que cabem; o preenchimento cobre ate essa
+ * distancia deles, e um pouco mais ate a folga. Devolve o pedaco, ou -1. */
+static int plano_perto(const PbMapa *m, int ip, const Pedacos *pd, double x, double y)
+{
+    double g = m->regras.grade;
+    double nucleo = pb_inflacao(m) + m->plano_erosao[ip] * g;   /* do nucleo ao alheio */
+    double raio = nucleo - m->plano_folga[ip];
+    int c0, l0, r, dc, dl, cols = m->colunas, lins = m->linhas;
+    if (m->plano_espessura[ip] / 2.0 < raio) raio = m->plano_espessura[ip] / 2.0;
+    raio -= g * 0.75;                     /* a grade nao pode dar o que nao tem */
+    if (raio < 0) raio = 0;
+    c0 = pb_coluna_de(m, x); l0 = pb_linha_de(m, y);
+    r = (int)ceil(raio / g);
+    for (dl = -r; dl <= r; dl++)
+        for (dc = -r; dc <= r; dc++) {
+            int c = c0 + dc, l = l0 + dl, rot;
+            double ex = pb_x_de(m, c) - x, ey = pb_y_de(m, l) - y;
+            if (c < 0 || l < 0 || c >= cols || l >= lins) continue;
+            if (ex * ex + ey * ey > raio * raio) continue;
+            rot = pd->rotulo[l * cols + c];
+            if (rot >= 0) return rot;
+        }
+    return -1;
+}
 
 /* O plano e o cobre que sobra: celula dentro da zona e livre de qualquer cobre
  * alheio no mapa INFLADO. E conservador de proposito (o mapa inflado guarda
@@ -215,10 +268,8 @@ typedef struct {
 static void pedacos_do_plano(PbMapa *m, int ip, const Rede *r, const PbAlvo *alvos,
                              Pedacos *pd)
 {
-    int cols = m->colunas, lins = m->linhas, face = m->plano_face[ip];
-    int rede = m->plano_rede[ip];
+    int cols = m->colunas, lins = m->linhas;
     size_t n = (size_t)cols * lins, i;
-    const unsigned char *regiao = m->plano_regiao[ip];
     int *fila = (int *)malloc(n * sizeof(int));
     int k;
 
@@ -227,7 +278,7 @@ static void pedacos_do_plano(PbMapa *m, int ip, const Rede *r, const PbAlvo *alv
     for (i = 0; i < n; i++) pd->rotulo[i] = -1;
     for (i = 0; i < n; i++) {
         int ini = 0, fim = 0;
-        if (pd->rotulo[i] >= 0 || !regiao[i] || m->celulas[i * 2 + face] != PB_LIVRE)
+        if (pd->rotulo[i] >= 0 || !pb_e_plano(m, ip, (int)i))
             continue;
         fila[fim++] = (int)i;
         pd->rotulo[i] = pd->n_pedacos;
@@ -237,7 +288,7 @@ static void pedacos_do_plano(PbMapa *m, int ip, const Rede *r, const PbAlvo *alv
                 int nc = c + DC8[d], nl = l + DL8[d], v;
                 if (nc < 0 || nl < 0 || nc >= cols || nl >= lins) continue;
                 v = nl * cols + nc;
-                if (pd->rotulo[v] < 0 && regiao[v] && m->celulas[v * 2 + face] == PB_LIVRE) {
+                if (pd->rotulo[v] < 0 && pb_e_plano(m, ip, v)) {
                     pd->rotulo[v] = pd->n_pedacos;
                     fila[fim++] = v;
                 }
@@ -251,16 +302,39 @@ static void pedacos_do_plano(PbMapa *m, int ip, const Rede *r, const PbAlvo *alv
     for (k = 0; k < pd->n_pedacos + r->n; k++) pd->pai[k] = k;
     for (k = 0; k < r->n; k++) {
         const PbAlvo *a = &alvos[r->indices[k]];
-        int bate[8], retos = 0, tortos = 0, d;
+        int bate[8], retos = 0, tortos = 0, d, usa_retos = 1, usa_tortos = 1;
+        /* Os raios saem em angulos FIXOS, e com largura: o KiCad acusou alivio
+         * termico faminto (C4 no interfone) quando a conta aceitava quaisquer 2
+         * de 8 direcoes testando um fio so. */
+        /* pad que solda do OUTRO lado (peca virada) nao liga neste plano:
+         * seria solda do lado do corpo */
+        if (a->face != m->plano_face[ip]) continue;
+        if (a->raio_termico > -900.0) {
+            double a90 = fmod(fmod(a->raio_termico, 90.0) + 90.0, 90.0);
+            if (a90 < 5.0 || a90 > 85.0) usa_tortos = 0;
+            else if (fabs(a90 - 45.0) < 5.0) usa_retos = 0;
+        }
         for (d = 0; d < 8; d++) {
-            int c = a->c, l = a->l, passos = 0;
+            /* O raio do KiCad e CURTO: vai do pad, atravessa o vao do alivio e
+             * so conta se ali ja houver plano. Andar para fora ate achar plano,
+             * como era antes, aceitava plano a 1,3 mm - onde o raio nao chega -
+             * e o DRC acusava alivio faminto (C4, Q1 no interfone). */
+            double ux = DC8[d], uy = DL8[d], nrm = sqrt(ux * ux + uy * uy);
+            double alcance = meio_eixo(a, atan2(uy, ux)) + m->plano_alivio[ip] + 0.05;
+            double meia = m->plano_raio[ip] / 2.0 * 0.8, q;
+            int peca = -1, ok = 1;
             bate[d] = -1;
-            while (passos < 200 && c >= 0 && l >= 0 && c < cols && l < lins
-                   && m->celulas[(l * cols + c) * 2 + face] == rede) {
-                c += DC8[d]; l += DL8[d]; passos++;
+            if ((d % 2 == 0 && !usa_retos) || (d % 2 == 1 && !usa_tortos)) continue;
+            ux /= nrm; uy /= nrm;
+            /* a ponta do raio, no centro e nas duas beiradas */
+            for (q = -meia; q <= meia + 1e-9 && ok; q += (meia > 0 ? meia : 1.0)) {
+                double px = a->x + ux * alcance - uy * q, py = a->y + uy * alcance + ux * q;
+                int cai = plano_perto(m, ip, pd, px, py);
+                if (cai < 0) ok = 0;
+                else if (peca < 0) peca = cai;
+                if (meia <= 0) break;
             }
-            if (c >= 0 && l >= 0 && c < cols && l < lins)
-                bate[d] = pd->rotulo[l * cols + c];
+            bate[d] = ok ? peca : -1;
             if (bate[d] >= 0) { if (d % 2 == 0) retos++; else tortos++; }
         }
         for (d = 0; d < 8; d++)
@@ -290,22 +364,33 @@ double pb_plano_perdido(const PbMapa *m)
         for (i = 0; i < n; i++) { rotulo[i] = -1; if (regiao[i]) na_zona++; }
         for (i = 0; i < n; i++) {
             int ini = 0, fim = 0, encosta = 0;
-            if (rotulo[i] >= 0 || !regiao[i] || m->celulas[i * 2 + face] != PB_LIVRE)
+            if (rotulo[i] >= 0 || !pb_e_plano(m, ip, (int)i))
                 continue;
             fila[fim++] = (int)i;
             rotulo[i] = 1;
             while (ini < fim) {
                 int cel = fila[ini++], c = cel % cols, l = cel / cols, d;
                 for (d = 0; d < 8; d += 2) {
-                    int nc = c + DC8[d], nl = l + DL8[d], v, dono;
+                    int nc = c + DC8[d], nl = l + DL8[d], v;
                     if (nc < 0 || nl < 0 || nc >= cols || nl >= lins) continue;
                     v = nl * cols + nc;
-                    dono = m->celulas[v * 2 + face];
-                    if (dono == rede) encosta = 1;
-                    if (rotulo[v] < 0 && regiao[v] && dono == PB_LIVRE) {
+                    if (rotulo[v] < 0 && pb_e_plano(m, ip, v)) {
                         rotulo[v] = 1;
                         fila[fim++] = v;
                     }
+                }
+                /* encosta na rede: cobre dela a ate a erosao + 1 celula */
+                if (!encosta) {
+                    int e = m->plano_erosao[ip] + 1, dc, dl;
+                    for (dl = -e; dl <= e && !encosta; dl++)
+                        for (dc = -e; dc <= e; dc++) {
+                            int nc = c + dc, nl = l + dl;
+                            if (nc < 0 || nl < 0 || nc >= cols || nl >= lins) continue;
+                            if (m->celulas[(nl * cols + nc) * 2 + face] == rede) {
+                                encosta = 1;
+                                break;
+                            }
+                        }
                 }
             }
             if (encosta) vivo += fim;
@@ -333,7 +418,7 @@ static int junta_grupo(const PbMapa *m, int ip, Pedacos *pd, int g, const Rede *
         if (*n_origens < max_origens) {
             origens[*n_origens * 3 + 0] = alvos[idx].c;
             origens[*n_origens * 3 + 1] = alvos[idx].l;
-            origens[*n_origens * 3 + 2] = 1;
+            origens[*n_origens * 3 + 2] = alvos[idx].face;
             (*n_origens)++;
         }
     }
@@ -586,6 +671,7 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
     int *caminho = NULL, max_caminho = 200000;
     int *origens = NULL;
     char *ligado = NULL, *falhou = NULL;
+    int n_via_base = 0;
     int *base = NULL;
     size_t n_celulas = (size_t)m->colunas * m->linhas * 2;
     PbSeg *t_segs = NULL;
@@ -627,6 +713,7 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
     t_abertas = (PbAberta *)malloc((size_t)(max_abertas > 0 ? max_abertas : 1)
                                    * sizeof(PbAberta));
     memcpy(base, m->celulas, n_celulas * sizeof(int));
+    n_via_base = m->n_via_lista;
     falhou = (char *)calloc((size_t)n_alvos, 1);
 
     passadas = m->regras.tentativas > 0 ? m->regras.tentativas : 1;
@@ -647,6 +734,7 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
 
         if (passada > 0) {
             memcpy(m->celulas, base, n_celulas * sizeof(int));
+            m->n_via_lista = n_via_base;
             m->soma_da_rede = -999999;
         }
         lig = uma_passada(m, alvos, n_alvos, redes, n_redes,
@@ -677,6 +765,7 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
     /* o mapa termina com o cobre da passada que ganhou, nao com o da ultima */
     if (ultima != melhor_passada) {
         memcpy(m->celulas, base, n_celulas * sizeof(int));
+            m->n_via_lista = n_via_base;
         m->soma_da_rede = -999999;
         pinta_trecho(m, segs, 0, melhor_ns, vias, 0, melhor_nv);
     }

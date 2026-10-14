@@ -44,8 +44,9 @@ def pecas_que_mudam(board, placa) -> list:
         if p is None or fp.IsLocked():
             continue
         if (fp.GetPosition() != pcbnew.VECTOR2I(_nm(p.x), _nm(p.y))
-                or abs(fp.GetOrientationDegrees() - p.giro) > 1e-6):
-            mudam.append(p.ref)
+                or abs(fp.GetOrientationDegrees() - p.giro) > 1e-6
+                or bool(fp.IsFlipped()) != bool(p.lado)):
+            mudam.append(p.ref + (" (virada)" if p.lado and not fp.IsFlipped() else ""))
     return mudam
 
 
@@ -63,11 +64,22 @@ def move_pecas(board, placa) -> int:
         if p is None or fp.IsLocked():
             continue
         nova = pcbnew.VECTOR2I(_nm(p.x), _nm(p.y))
-        if (fp.GetPosition() != nova
+        virar = bool(fp.IsFlipped()) != bool(p.lado)
+        if (fp.GetPosition() != nova or virar
                 or abs(fp.GetOrientationDegrees() - p.giro) > 1e-6):
+            if virar:
+                # o mesmo espelho que o modelo usa (y local), conferido contra
+                # o proprio KiCad
+                fp.Flip(fp.GetPosition(), pcbnew.FLIP_DIRECTION_LEFT_RIGHT)
             fp.SetPosition(nova)
             fp.SetOrientationDegrees(p.giro)
             movidas += 1
+        # Peca virada solda EM CIMA: o plano de baixo nao pode ligar nos pads
+        # dela (seria solda do lado do corpo). Sem pad ligado por baixo, o
+        # roteador liga a rede por trilha em cima.
+        if p.lado:
+            for pad in fp.Pads():
+                pad.SetLocalZoneConnection(pcbnew.ZONE_CONNECTION_NONE)
     return movidas
 
 
