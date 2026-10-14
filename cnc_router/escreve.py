@@ -20,6 +20,16 @@ def _camada(board, nome: str) -> int:
     return board.GetLayerID(nome)
 
 
+def zonas_de_cobre(board) -> list:
+    """As zonas de cobre com rede (os planos), pegas ANTES de mexer no board.
+
+    Depois de board.Remove() nas trilhas antigas, o pcbnew passa a devolver as
+    zonas como SwigPyObject cru, sem metodo nenhum - foi assim que a gravacao
+    quebrou ao preencher o plano no interfone. Pegas antes, continuam ZONE.
+    """
+    return [z for z in board.Zones() if not z.GetIsRuleArea() and z.GetNetCode() > 0]
+
+
 def limpa(board, so_das_redes=None) -> int:
     """Tira as trilhas e vias que ja existem. Devolve quantas saiu.
 
@@ -83,7 +93,7 @@ def move_pecas(board, placa) -> int:
     return movidas
 
 
-def escreve(board, resultado, regras) -> dict:
+def escreve(board, resultado, regras, zonas=None) -> dict:
     """Cria no board as trilhas e vias do resultado."""
     largura = _nm(regras.trilha)
     via_ilha = _nm(regras.via_ilha)
@@ -117,7 +127,11 @@ def escreve(board, resultado, regras) -> dict:
 
     # O plano e o cobre que sobra: com trilha nova, ele tem de ser preenchido de
     # novo, senao fica o desenho velho por cima das trilhas novas.
-    zonas = [z for z in board.Zones() if not z.GetIsRuleArea() and z.GetNetCode() > 0]
+    if zonas is None:              # quem chamou nao pegou antes: tenta agora
+        try:
+            zonas = zonas_de_cobre(board)
+        except AttributeError:
+            zonas = []
     if zonas:
         pcbnew.ZONE_FILLER(board).Fill(zonas)
     board.BuildConnectivity()

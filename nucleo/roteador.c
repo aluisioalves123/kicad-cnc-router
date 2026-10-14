@@ -142,6 +142,23 @@ static int cabe_via(PbMapa *m, int c, int l, int rede)
     return 1;
 }
 
+/* ------------------------------------------------------------------ rasgo */
+
+/* A celula esta ocupada so por trilha/via de outra rede (que pode ser rasgada)? */
+static int rasgavel(const PbMapa *m, int c, int l, int face, int rede)
+{
+    int idx, base, dono, ip;
+    if (m->rasgo <= 0.0 || !m->rasgo_base) return 0;
+    if (c < 0 || l < 0 || c >= m->colunas || l >= m->linhas) return 0;
+    idx = (l * m->colunas + c) * 2 + face;
+    base = m->rasgo_base[idx];
+    if (base != PB_LIVRE && base != rede) return 0;      /* pad, borda, proibida */
+    dono = m->celulas[idx];
+    for (ip = 0; ip < m->n_planos; ip++)
+        if (dono == m->plano_rede[ip]) return 0;          /* plano nao se rasga */
+    return 1;
+}
+
 /* ------------------------------------------------------------------ alcance */
 
 /* Da para chegar? Varredura simples, sem custo nem direcao: as mesmas jogadas do
@@ -185,7 +202,7 @@ static int alcanca(PbMapa *m, int rede, const int *origens, int n_origens)
         if (m->alvo_marca[e] == m->busca) return 1;
         for (d = 0; d < 8; d++) {
             int nc = c + DC[d], nl = l + DL[d], v;
-            if (!pb_livre_para(m, nc, nl, f, rede)) continue;
+            if (!pb_livre_para(m, nc, nl, f, rede) && !rasgavel(m, nc, nl, f, rede)) continue;
             v = (nl * cols + nc) * 2 + f;
             if (m->bfs_visto[v] == marca) continue;
             m->bfs_visto[v] = marca;
@@ -264,11 +281,20 @@ int pb_roteia(PbMapa *m, int rede,
     long gastos = 0;
     int achou = -1, i, n = 0;
     double peso_h = m->regras.peso_estimativa;
+    long orcamento = m->regras.orcamento;
     Rumo rumo;
 
     if (n_origens <= 0 || n_alvos <= 0) return -1;
     prepara_via(m, rede);
     if (peso_h < 1.0) peso_h = 1.0;
+    if (m->rasgo > 0.0) {
+        /* Com rasgo quase toda a placa vira caminho: sem freio, uma busca dessas
+         * custava mais que o roteamento inteiro (15 s -> 67 s no interfone). Vai
+         * direto ao alvo e com orcamento curto - e uma segunda chance, nao a
+         * busca principal. */
+        if (peso_h < 2.0) peso_h = 2.0;
+        orcamento = 400000;
+    }
 
     if (!m->carimbo) {
         m->g = (float *)malloc(total * sizeof(float));
@@ -322,7 +348,7 @@ int pb_roteia(PbMapa *m, int rede,
 
         if (!heap_pop(&h, &no)) break;
         ++gastos;
-        if (m->regras.orcamento > 0 && gastos > m->regras.orcamento) break;
+        if (orcamento > 0 && gastos > orcamento) break;
         if ((gastos & 0xFFFF) == 0 && m->parar && *m->parar) break;
 
         est = no.estado;
@@ -357,8 +383,12 @@ int pb_roteia(PbMapa *m, int rede,
         for (d = 0; d < 8; d++) {
             int nc = c + DC[d], nl = l + DL[d], prox;
             double custo, ng;
-            if (!pb_livre_para(m, nc, nl, face, rede)) continue;
-            custo = ((DC[d] && DL[d]) ? RAIZ2 : 1.0) * peso;
+            double rasga = 0.0;
+            if (!pb_livre_para(m, nc, nl, face, rede)) {
+                if (!rasgavel(m, nc, nl, face, rede)) continue;
+                rasga = m->rasgo;          /* atravessa cobre alheio: paga */
+            }
+            custo = ((DC[d] && DL[d]) ? RAIZ2 : 1.0) * peso + rasga;
             if (dir != PB_PARADO && dir != d) {
                 int giro = abs(d - dir);
                 if (giro > 4) giro = 8 - giro;

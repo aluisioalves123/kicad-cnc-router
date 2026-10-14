@@ -69,6 +69,13 @@ struct PbMapa {
     int *via_lista;
     int n_via_lista, cap_via_lista;
 
+    /* Rip-up dentro da busca (como o MazeRipupResolver do Freerouting): com
+     * rasgo > 0, o A* pode atravessar cobre de OUTRA rede pagando isto por celula.
+     * So cobre de trilha/via - a celula tem de estar livre em `rasgo_base`, o
+     * mapa antes das trilhas - e nunca de rede com plano. */
+    double rasgo;
+    const int *rasgo_base;
+
     float *g;
     int *veio;
     unsigned *carimbo;   /* 2*busca: aberto nesta busca; 2*busca+1: fechado */

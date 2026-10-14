@@ -562,7 +562,8 @@ static double arredonda(double v)
  * nenhuma legal apareceu. Antes devolvia a mais barata, e a mais barata quase
  * sempre tinha um pad encostado em outro por decimos de mm: medido na blink
  * blink, 6140 de 6280 sorteios iam para o lixo sem nem serem roteados. */
-static void recoze(Ctx *c, int passos, unsigned long long *s)
+static void recoze(Ctx *c, int passos, unsigned long long *s, double fator_t0,
+                   const unsigned char *congeladas)
 {
     int *moveis, n_moveis = 0, i, passo, achou_legal = 0, ok;
     PbPeca *melhor_pose, *melhor_legal;
@@ -570,7 +571,7 @@ static void recoze(Ctx *c, int passos, unsigned long long *s)
 
     moveis = (int *)malloc((size_t)(c->n_pecas > 0 ? c->n_pecas : 1) * sizeof(int));
     for (i = 0; i < c->n_pecas; i++)
-        if (c->pecas[i].movel) moveis[n_moveis++] = i;
+        if (c->pecas[i].movel && !(congeladas && congeladas[i])) moveis[n_moveis++] = i;
     if (n_moveis == 0) { free(moveis); return; }
 
     melhor_pose = (PbPeca *)malloc((size_t)c->n_pecas * sizeof(PbPeca));
@@ -585,6 +586,8 @@ static void recoze(Ctx *c, int passos, unsigned long long *s)
                    ? (c->bx1 - c->bx0) : (c->by1 - c->by0)) / 4.0;
     t0 = atual / n_moveis * 0.5;
     if (t0 < 1.0) t0 = 1.0;
+    t0 *= fator_t0;                 /* reparo: morno, para nao desmontar a melhor */
+    if (t0 < 0.05) t0 = 0.05;
 
     for (passo = 0; passo < passos; passo++) {
         double frac = (double)passo / passos;
@@ -740,6 +743,51 @@ static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
     return nab;
 }
 
+/* ------------------------------------------------------------------ reparo */
+
+/* Culpadas: pecas moveis com pad numa rede que nao fechou. */
+static void marca_culpadas(const Ctx *c, const int *falhas, unsigned char *culpadas,
+                           int *n_culpadas)
+{
+    int i, k;
+    memset(culpadas, 0, (size_t)c->n_pecas);
+    *n_culpadas = 0;
+    for (i = 0; i < c->n_pads; i++) {
+        const PbPadC *pad = &c->pads[i];
+        if (!pad->rede || !c->pecas[pad->peca].movel || culpadas[pad->peca]) continue;
+        for (k = 0; k < c->n_redes; k++)
+            if (c->redes[k] == pad->rede && falhas[k]) {
+                culpadas[pad->peca] = 1;
+                (*n_culpadas)++;
+                break;
+            }
+    }
+}
+
+/* Leva uma peca culpada (as vezes duas) para um lugar, giro e lado sorteados na
+ * placa. O sorteio comum so aproxima e afasta aos poucos a partir da posicao de
+ * entrada, e o custo dele (comprimento de fio) nao ve cruzamento: o J1 do
+ * interfone nunca saia do canal apertado ao lado do Nano. Aqui ele salta. */
+static void perturba(Ctx *c, const unsigned char *culpadas, unsigned long long *s,
+                     unsigned char *movidas)
+{
+    int lista[256], n = 0, i, vezes;
+    memset(movidas, 0, (size_t)c->n_pecas);
+    for (i = 0; i < c->n_pecas && n < 256; i++)
+        if (culpadas[i] && c->pecas[i].movel) lista[n++] = i;
+    if (n == 0) return;
+    vezes = (n > 1 && sorteio(s) < 0.3) ? 2 : 1;
+    while (vezes--) {
+        int qual = lista[proximo(s) % (unsigned long long)n];
+        PbPeca *p = &c->pecas[qual];
+        movidas[qual] = 1;
+        p->x = arredonda(c->bx0 + sorteio(s) * (c->bx1 - c->bx0));
+        p->y = arredonda(c->by0 + sorteio(s) * (c->by1 - c->by0));
+        p->giro = 90.0 * (double)(proximo(s) % 4);
+        if (p->pode_virar && sorteio(s) < 0.5) p->lado = !p->lado;
+    }
+}
+
 /* ------------------------------------------------------------------ paralelo */
 
 /* Cada sorteio e independente - posiciona e roteia do zero -, entao mais nucleo e
@@ -792,7 +840,12 @@ static void fio_espera(Fio f) { pthread_join(f, NULL); }
 #endif
 
 #define PESO_POR_FALHA 0.5
-#define PESO_MAX       8.0
+/* Teto baixo de proposito. A rede que falha ganha peso e o sorteio aproxima os
+ * pads dela - bom quando falta caminho curto, ruim quando falta ESPACO: no
+ * interfone o SCK e o MISO precisam se cruzar entre o J1 e o Nano, e puxar o J1
+ * para perto do Nano era justamente tirar o lugar das vias do cruzamento. Quem
+ * resolve isso e o sorteio de reparo (ver perturba). */
+#define PESO_MAX       3.0
 
 typedef struct {
     Ctx base;                    /* so leitura: geometria, pads, redes */
@@ -814,6 +867,10 @@ typedef struct {
     double melhor_perda;         /* plano perdido, mm2 */
     int sem_melhora;             /* sorteios roteados desde a ultima melhora */
     PbPeca *pose_vencedora;
+    /* pecas com pad nas ligacoes que a vencedora deixou abertas: e nelas que o
+     * sorteio de reparo mexe */
+    unsigned char *culpadas;
+    int n_culpadas;
     double *peso;                /* por rede: quem nao fecha pesa mais no custo */
     int descartados, julgados;
     PbPlacar *placar;            /* publicado ao vivo; `parar` vem de quem chamou */
@@ -867,13 +924,15 @@ static void trabalha(void *arg)
     double *peso = (double *)malloc((size_t)nr * sizeof(double));
     int *falhas = (int *)malloc((size_t)nr * sizeof(int));
     PbMapa *mapa = NULL;          /* deste nucleo, reaproveitado (ver julga) */
+    unsigned char *culpadas = (unsigned char *)malloc((size_t)(c.n_pecas > 0 ? c.n_pecas : 1));
+    unsigned char *movidas = (unsigned char *)malloc((size_t)(c.n_pecas > 0 ? c.n_pecas : 1));
     c.pecas = pecas;
     c.peso = peso;
     c.mundo = (double *)malloc((size_t)c.n_pecas * MAX_CASCO * 2 * sizeof(double));
     c.caixas = (double *)malloc((size_t)c.n_pecas * 4 * sizeof(double));
 
     for (;;) {
-        int k, ab, nv;
+        int k, ab, nv, reparo;
         double fio, perda;
         unsigned long long s;
         int faixa, perde;
@@ -882,13 +941,27 @@ static void trabalha(void *arg)
         if (!sorteio_continua(g)) { destranca(&g->trava); break; }
         k = g->proximo++;
         memcpy(peso, g->peso, (size_t)nr * sizeof(double));
+        /* metade dos sorteios, enquanto sobrar ligacao aberta, e de REPARO:
+         * parte da melhor posicao e mexe so nas pecas culpadas */
+        reparo = g->melhor_ab > 0 && g->n_culpadas > 0 && (k % 2 == 1);
+        if (reparo) {
+            memcpy(pecas, g->pose_vencedora, (size_t)c.n_pecas * sizeof(PbPeca));
+            memcpy(culpadas, g->culpadas, (size_t)c.n_pecas);
+        }
         destranca(&g->trava);
 
-        memcpy(pecas, g->inicial, (size_t)c.n_pecas * sizeof(PbPeca));
+        if (!reparo) memcpy(pecas, g->inicial, (size_t)c.n_pecas * sizeof(PbPeca));
         s = g->semente ^ ((unsigned long long)k * 0x9E3779B97F4A7C15ULL);
         if (!s) s = 1;
         proximo(&s);
-        recoze(&c, g->passos, &s);
+        if (reparo) {
+            /* a peca que saltou fica CONGELADA no lugar novo: o recozimento, que
+             * so enxerga fio, a puxava de volta para o mesmo canal apertado */
+            perturba(&c, culpadas, &s, movidas);
+            recoze(&c, g->passos / 2, &s, 0.05, movidas);
+        } else {
+            recoze(&c, g->passos, &s, 1.0, NULL);
+        }
         if (!legal(&c)) {
             tranca(&g->trava);
             g->descartados++;
@@ -924,6 +997,7 @@ static void trabalha(void *arg)
             g->sem_melhora = 0;
             g->vencedor = k;
             memcpy(g->pose_vencedora, pecas, (size_t)c.n_pecas * sizeof(PbPeca));
+            marca_culpadas(&c, falhas, g->culpadas, &g->n_culpadas);
         }
         /* sem plano, fechou e conector na periferia: pronto. Com plano, ainda
          * da para perder menos plano - segue ate parar de melhorar */
@@ -942,6 +1016,8 @@ static void trabalha(void *arg)
 
     free(pecas); free(peso); free(falhas); free(c.mundo); free(c.caixas);
     pb_destroi(mapa);
+    free(culpadas);
+    free(movidas);
 }
 
 /* ------------------------------------------------------------------ api */
@@ -1040,6 +1116,7 @@ int pb_posiciona(const PbRegras *r,
 
     g.inicial = (PbPeca *)malloc((size_t)n_pecas * sizeof(PbPeca));
     g.pose_vencedora = (PbPeca *)malloc((size_t)n_pecas * sizeof(PbPeca));
+    g.culpadas = (unsigned char *)calloc((size_t)(n_pecas > 0 ? n_pecas : 1), 1);
     memcpy((PbPeca *)g.inicial, pecas, (size_t)n_pecas * sizeof(PbPeca));
     memcpy(g.pose_vencedora, pecas, (size_t)n_pecas * sizeof(PbPeca));
     g.x0 = x0; g.y0 = y0; g.larg = larg; g.alt = alt;
@@ -1060,6 +1137,7 @@ int pb_posiciona(const PbRegras *r,
     placar->conectores_mm = g.melhor_faixa * FAIXA_MM;
     for (i = 0; i < c->n_redes; i++)
         if (falhas[i]) g.peso[i] += PESO_POR_FALHA * falhas[i];
+    marca_culpadas(c, falhas, g.culpadas, &g.n_culpadas);
     g.placar = placar;
     placar->abertas_antes = placar->abertas_depois = g.melhor_ab;
     placar->vias = g.melhor_vias;
@@ -1093,6 +1171,7 @@ int pb_posiciona(const PbRegras *r,
 
     free(fios); free(falhas); free(g.peso);
     free((PbPeca *)g.inicial); free(g.pose_vencedora); free(c->redes);
+    free(g.culpadas);
     free(c->casco); free(n_casco); free(c->mundo); free(c->caixas);
     return g.melhor_ab;
 }

@@ -12,7 +12,7 @@ import ctypes
 import os
 import sys
 
-ABI_ESPERADA = 16
+ABI_ESPERADA = 17
 
 CIRCULO, CAPSULA, RETANGULO, POLIGONO, FORA_DE, SEGMENTO = 0, 1, 2, 3, 4, 5
 CIMA, BAIXO, AMBAS = 1, 2, 3
@@ -29,7 +29,7 @@ class PbRegras(ctypes.Structure):
         ("peso_cima", ctypes.c_double),
         ("borda", ctypes.c_double),
         ("peso_plano", ctypes.c_double),
-        ("peso_estimativa", ctypes.c_double),
+        ("peso_estimativa", ctypes.c_double), ("rasgo", ctypes.c_double),
         ("salto_via", ctypes.c_int), ("orcamento", ctypes.c_long),
         ("tentativas", ctypes.c_int),
     ]
@@ -214,6 +214,7 @@ def regras_para_c(regras, custos=None, salto_via=5, orcamento=3000000,
         borda=regras.borda,
         peso_plano=getattr(c, "plano", 2.0),
         peso_estimativa=getattr(c, "estimativa", 1.0),
+        rasgo=getattr(c, "rasgo", 0.0),
         salto_via=salto_via, orcamento=orcamento, tentativas=tentativas,
     )
 

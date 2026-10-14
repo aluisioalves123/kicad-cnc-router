@@ -261,8 +261,9 @@ class Janela(wx.Dialog):
                          | wx.ICON_QUESTION, self) != wx.YES:
             return
         escritor.move_pecas(self.board, p)
+        zonas = escritor.zonas_de_cobre(self.board)     # antes de apagar trilha
         escritor.limpa(self.board)
-        escritor.escreve(self.board, res, self.regras)
+        escritor.escreve(self.board, res, self.regras, zonas)
         # fecha para o Run() terminar: e ai que o KiCad registra o desfazer e
         # redesenha a placa
         self.EndModal(wx.ID_OK)

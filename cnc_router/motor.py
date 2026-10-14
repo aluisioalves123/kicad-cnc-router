@@ -126,7 +126,7 @@ def roteia(placa, regras, custos: Custos = None) -> Resultado:
         leve = Custos(curva=custos.curva, via=custos.via,
                       face_de_cima=custos.face_de_cima, plano=custos.plano,
                       estimativa=max(2.0, custos.estimativa),
-                      tentativas=min(3, custos.tentativas))
+                      tentativas=min(3, custos.tentativas), rasgo=custos.rasgo)
         outro = _roteia(placa, regras, leve)
         if ((len(outro.abertas), outro.plano_perdido, len(outro.vias))
                 < (len(res.abertas), res.plano_perdido, len(res.vias))):

@@ -25,8 +25,11 @@ class Custos:
     """
 
     def __init__(self, curva=6.0, via=40.0, face_de_cima=1.15, plano=2.0,
-                 estimativa=1.0, tentativas=6):
+                 estimativa=1.0, tentativas=6, rasgo=0.0):
         self.tentativas = tentativas      # passadas de rip-up por roteamento
+        # Rip-up dentro da busca (estilo Freerouting): custo por celula de
+        # atravessar cobre alheio; 0 = desligado (padrao, ver perfcnc.h).
+        self.rasgo = rasgo
         self.curva = curva
         self.via = via
         # Atravessar o plano de outra rede pela face de baixo: cada trilha ali

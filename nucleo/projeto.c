@@ -441,6 +441,111 @@ static int grupo_do_pad(Pedacos *pd, const Rede *r, int idx)
     return -1;
 }
 
+/* ------------------------------------------------------------------ rasgo */
+
+/* Custo por celula de atravessar cobre alheio, e quantas vezes cada rede pode
+ * ser rasgada numa passada. O custo cresce a cada passada, como no Freerouting
+ * (custo inicial x numero da passada): no comeco rasga facil, depois fica caro e
+ * a solucao assenta. O limite garante que a passada termina. */
+#define LIMITE_RASGOS    2
+
+static double dist_ponto_seg(double px, double py, double ax, double ay,
+                             double bx, double by)
+{
+    double dx = bx - ax, dy = by - ay, t, qx, qy, l2 = dx * dx + dy * dy;
+    t = l2 > 1e-12 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0.0;
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    qx = ax + t * dx; qy = ay + t * dy;
+    return sqrt((px - qx) * (px - qx) + (py - qy) * (py - qy));
+}
+
+static double dist_seg_seg(double ax, double ay, double bx, double by,
+                           double cx, double cy, double dx, double dy)
+{
+    double d1 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    double d2 = (bx - ax) * (dy - ay) - (by - ay) * (dx - ax);
+    double d3 = (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx);
+    double d4 = (dx - cx) * (by - cy) - (dy - cy) * (bx - cx);
+    double m, t;
+    if (((d1 > 0) != (d2 > 0)) && ((d3 > 0) != (d4 > 0))) return 0.0;   /* cruzam */
+    m = dist_ponto_seg(ax, ay, cx, cy, dx, dy);
+    t = dist_ponto_seg(bx, by, cx, cy, dx, dy); if (t < m) m = t;
+    t = dist_ponto_seg(cx, cy, ax, ay, bx, by); if (t < m) m = t;
+    t = dist_ponto_seg(dx, dy, ax, ay, bx, by); if (t < m) m = t;
+    return m;
+}
+
+/* Redes alheias que o cobre novo [s0, ns) / [v0, nv) atropela, medido em mm. */
+static int atropeladas(const PbMapa *m, const PbSeg *segs, int s0, int ns,
+                       const PbViaOut *vias, int v0, int nv, int rede,
+                       int *saida, int max)
+{
+    double t = m->regras.trilha, f = m->regras.folga, v = m->regras.via_ilha;
+    int i, k, n = 0;
+#define X(c) pb_x_de(m, c)
+#define Y(l) pb_y_de(m, l)
+#define ANOTA(r) do { int q_, ja_ = 0; for (q_ = 0; q_ < n; q_++) if (saida[q_] == (r)) ja_ = 1; \
+                      if (!ja_ && n < max) saida[n++] = (r); } while (0)
+    for (i = 0; i < s0; i++) {
+        const PbSeg *a = &segs[i];
+        if (a->rede == rede || a->face < 0) continue;
+        for (k = s0; k < ns; k++) {
+            const PbSeg *b = &segs[k];
+            if (a->face != b->face) continue;
+            if (dist_seg_seg(X(a->c1), Y(a->l1), X(a->c2), Y(a->l2),
+                             X(b->c1), Y(b->l1), X(b->c2), Y(b->l2)) < t + f - 1e-6) {
+                ANOTA(a->rede); break;
+            }
+        }
+        for (k = v0; k < nv; k++)
+            if (dist_ponto_seg(X(vias[k].c), Y(vias[k].l), X(a->c1), Y(a->l1),
+                               X(a->c2), Y(a->l2)) < t / 2 + v / 2 + f - 1e-6) {
+                ANOTA(a->rede); break;
+            }
+    }
+    for (i = 0; i < v0; i++) {
+        if (vias[i].rede == rede) continue;
+        for (k = s0; k < ns; k++)
+            if (dist_ponto_seg(X(vias[i].c), Y(vias[i].l), X(segs[k].c1), Y(segs[k].l1),
+                               X(segs[k].c2), Y(segs[k].l2)) < t / 2 + v / 2 + f - 1e-6) {
+                ANOTA(vias[i].rede); break;
+            }
+        for (k = v0; k < nv; k++) {
+            double dx = X(vias[i].c) - X(vias[k].c), dy = Y(vias[i].l) - Y(vias[k].l);
+            if (sqrt(dx * dx + dy * dy) < v + f - 1e-6) { ANOTA(vias[i].rede); break; }
+        }
+    }
+#undef X
+#undef Y
+#undef ANOTA
+    return n;
+}
+
+/* Tira do resultado todo o cobre de uma rede (e as ligacoes abertas dela, que
+ * vao ser tentadas de novo). */
+static void tira_rede(int rede, PbSeg *segs, int *ns, PbViaOut *vias, int *nv,
+                      PbAberta *abertas, int *na)
+{
+    int i, k;
+    for (i = k = 0; i < *ns; i++) if (segs[i].rede != rede) segs[k++] = segs[i];
+    *ns = k;
+    for (i = k = 0; i < *nv; i++) if (vias[i].rede != rede) vias[k++] = vias[i];
+    *nv = k;
+    for (i = k = 0; i < *na; i++) if (abertas[i].rede != rede) abertas[k++] = abertas[i];
+    *na = k;
+}
+
+/* Mapa de volta ao de antes das trilhas, e todo o cobre que sobrou pintado. */
+static void reconstroi(PbMapa *m, const int *base, size_t n_celulas, int n_via_base,
+                       const PbSeg *segs, int ns, const PbViaOut *vias, int nv)
+{
+    memcpy(m->celulas, base, n_celulas * sizeof(int));
+    m->soma_da_rede = -999999;
+    m->n_via_lista = n_via_base;
+    pinta_trecho(m, segs, 0, ns, vias, 0, nv);
+}
+
 /* Uma passada: roteia as redes na ordem em que estao em `redes`. Conta em cada
  * rede quantas ligacoes dela nao fecharam - e isso que a proxima passada usa
  * para decidir quem vai primeiro. */
@@ -451,10 +556,13 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
                        PbAberta *abertas, int max_abertas,
                        int *n_segs_out, int *n_vias_out, int *n_abertas_out,
                        int *caminho, int max_caminho, int *origens, char *ligado,
-                       int teto, char *falhou)
+                       int teto, char *falhou,
+                       const int *base, size_t n_celulas, int n_via_base, int passada)
 {
     int i, j, ligadas = 0, n_origens;
     int n_segs = 0, n_vias = 0, n_abertas = 0;
+    int *fila, *rasgos, *lig_rede, cab = 0, cauda = 0, rasgos_total = 0;
+    int atrop[64];
     int *pares = (int *)malloc((size_t)(n_alvos > 0 ? n_alvos : 1) * 2 * sizeof(int));
     int n_pares = 0;
     int *celpad = (int *)malloc((size_t)MAX_CEL_PAD * 3 * sizeof(int));
@@ -496,9 +604,17 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
         }
     }
 
-    for (j = 0; j < n_redes; j++) {
-        Rede *r = &redes[j];
-        int restantes, ip = plano_da_rede(m, r->rede);
+    /* Fila de redes: a rede rasgada volta para o fim dela. */
+    fila = (int *)malloc((size_t)(n_redes * (LIMITE_RASGOS + 1) + 1) * sizeof(int));
+    rasgos = (int *)calloc((size_t)(n_redes > 0 ? n_redes : 1), sizeof(int));
+    lig_rede = (int *)calloc((size_t)(n_redes > 0 ? n_redes : 1), sizeof(int));
+    for (j = 0; j < n_redes; j++) fila[cauda++] = j;
+    while (cab < cauda) {
+        Rede *r;
+        int restantes, ip;
+        j = fila[cab++];
+        r = &redes[j];
+        ip = plano_da_rede(m, r->rede);
         if (m->parar && *m->parar) break;   /* quem chamou desistiu */
         Pedacos pd;
         if (r->n < 2) continue;
@@ -529,7 +645,7 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
             entraram = junta_grupo(m, ip, &pd, g0, r, alvos, ligado,
                                    origens, &n_origens, max_caminho);
             restantes = r->n - entraram;
-            ligadas += entraram - 1;
+            lig_rede[j] += entraram - 1;
         } else {
             ligado[r->indices[0]] = 1;
             /* parte de qualquer ponto do primeiro pad onde a trilha caiba */
@@ -539,7 +655,7 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
         }
 
         while (restantes > 0) {
-            int melhor = -1, n, n_destino;
+            int melhor = -1, n, n_destino, rasgou, q;
             double melhor_d = 1e30;
 
             /* proximo alvo: o mais perto do que ja esta ligado */
@@ -559,6 +675,47 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
             n_destino = celulas_do_pad(m, &alvos[melhor], r->rede, celpad, MAX_CEL_PAD);
             n = pb_roteia(m, r->rede, origens, n_origens, celpad, n_destino,
                           caminho, max_caminho * 4);
+            rasgou = 0;
+            if (n < 0 && ip < 0 && m->regras.rasgo > 0.0 && rasgos_total < 2 * n_redes) {
+                /* nao passou: tenta de novo podendo atravessar cobre alheio */
+                int s0 = n_segs, v0 = n_vias, na_, ok = 1;
+                m->rasgo = m->regras.rasgo * (passada + 1);
+                m->rasgo_base = base;
+                n = pb_roteia(m, r->rede, origens, n_origens, celpad, n_destino,
+                              caminho, max_caminho * 4);
+                m->rasgo = 0.0;
+                if (n >= 0) {
+                    em_segmentos(caminho, n, r->rede, segs, &n_segs, max_segs,
+                                 vias, &n_vias, max_vias);
+                    na_ = atropeladas(m, segs, s0, n_segs, vias, v0, n_vias, r->rede,
+                                      atrop, 64);
+                    for (q = 0; q < na_ && ok; q++) {
+                        int jx;
+                        for (jx = 0; jx < n_redes; jx++) if (redes[jx].rede == atrop[q]) break;
+                        if (jx == n_redes || plano_da_rede(m, atrop[q]) >= 0
+                                || rasgos[jx] >= LIMITE_RASGOS)
+                            ok = 0;
+                    }
+                    if (!ok || na_ == 0) {
+                        /* nao vale (ou nao atropelou nada: e outra coisa) */
+                        n_segs = s0; n_vias = v0; n = -1;
+                    } else {
+                        for (q = 0; q < na_; q++) {
+                            int jx;
+                            for (jx = 0; jx < n_redes; jx++) if (redes[jx].rede == atrop[q]) break;
+                            rasgos[jx]++;
+                            rasgos_total++;
+                            tira_rede(atrop[q], segs, &n_segs, vias, &n_vias,
+                                      abertas, &n_abertas);
+                            lig_rede[jx] = 0;
+                            fila[cauda++] = jx;
+                        }
+                        reconstroi(m, base, n_celulas, n_via_base, segs, n_segs,
+                                   vias, n_vias);
+                        rasgou = 1;
+                    }
+                }
+            }
             if (n < 0) {
                 if (n_abertas < max_abertas) {
                     abertas[n_abertas].rede = r->rede;
@@ -584,7 +741,9 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
                 /* ja perdeu para uma passada anterior: nao adianta terminar */
                 if (teto >= 0 && n_abertas > teto) {
                     if (ip >= 0) { free(pd.rotulo); free(pd.pai); }
+                    for (q = 0; q < n_redes; q++) ligadas += lig_rede[q];
                     free(pares); free(celpad); free(celpad2);
+                    free(fila); free(rasgos); free(lig_rede);
                     *n_segs_out = n_segs;
                     *n_vias_out = n_vias;
                     *n_abertas_out = n_abertas;
@@ -593,7 +752,7 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
                 continue;
             }
 
-            {
+            if (!rasgou) {                  /* com rasgo, ja entrou no mapa refeito */
                 int s0 = n_segs, v0 = n_vias;
                 em_segmentos(caminho, n, r->rede, segs, &n_segs, max_segs,
                              vias, &n_vias, max_vias);
@@ -613,16 +772,18 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
                 entraram = junta_grupo(m, ip, &pd, g, r, alvos, ligado,
                                        origens, &n_origens, max_caminho);
                 restantes -= entraram;
-                ligadas += entraram;
+                lig_rede[j] += entraram;
             } else {
                 ligado[melhor] = 1;
                 restantes--;
-                ligadas++;
+                lig_rede[j]++;
             }
         }
         if (ip >= 0) { free(pd.rotulo); free(pd.pai); }
     }
+    for (j = 0; j < n_redes; j++) ligadas += lig_rede[j];
     free(pares); free(celpad); free(celpad2);
+    free(fila); free(rasgos); free(lig_rede);
 
     *n_segs_out = n_segs;
     *n_vias_out = n_vias;
@@ -740,7 +901,8 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
         lig = uma_passada(m, alvos, n_alvos, redes, n_redes,
                           t_segs, max_segs, t_vias, max_vias, t_abertas, max_abertas,
                           &ns, &nv, &na, caminho, max_caminho, origens, ligado,
-                          melhor_passada < 0 ? -1 : melhor_na, falhou);
+                          melhor_passada < 0 ? -1 : melhor_na, falhou,
+                          base, n_celulas, n_via_base, passada);
         ultima = passada;
         fio = fio_de(m, t_segs, ns);
         perda = pb_plano_perdido(m);

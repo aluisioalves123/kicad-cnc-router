@@ -28,7 +28,7 @@
  * "15 pinos soltos" em toda configuracao. Demorei a desconfiar justamente porque
  * parecia certo. Binario incompativel tem de falhar na cara, nao mentir baixinho.
  */
-#define PB_ABI 16  /* 16: pecas dos dois lados (PbPeca.lado, PbAlvo.face) */
+#define PB_ABI 17  /* 17: rip-up dentro da busca (PbRegras.rasgo; 0 = desligado) */
 /* (o corpo agora e o courtyard - mesma struct, mesma ABI) */
 
 /* ------------------------------------------------------------------ formas */
@@ -67,6 +67,11 @@ typedef struct {
      * 1 a busca vai mais direto ao alvo e explora muito menos - em placa grande e
      * a diferenca entre segundos e minutos -, com caminho um pouco menos otimo. */
     double peso_estimativa;
+    /* Rip-up dentro da busca, como o do Freerouting: custo por celula de
+     * atravessar cobre alheio na 1a passada (cresce a cada passada); 0 =
+     * desligado. Desligado por padrao: no interfone rasgava redes que estavam
+     * boas e piorava o resultado (1 -> 2 abertas), mais lento. */
+    double rasgo;
 
     int salto_via;       /* a via so e tentada de N em N celulas */
     long orcamento;      /* teto de nos por busca; 0 = sem teto */

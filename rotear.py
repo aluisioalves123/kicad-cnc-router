@@ -68,8 +68,9 @@ def principal(caminho: str) -> int:
         print("  nenhum problema")
 
     movidas = escritor.move_pecas(board, p)
+    zonas = escritor.zonas_de_cobre(board)          # antes de apagar trilha
     tirou = escritor.limpa(board)
-    criou = escritor.escreve(board, res, regras)
+    criou = escritor.escreve(board, res, regras, zonas)
     saida = caminho.replace(".kicad_pcb", "-roteado.kicad_pcb")
     board.Save(saida)
 
