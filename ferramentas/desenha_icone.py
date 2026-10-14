@@ -1,5 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Desenha o icone do plugin: placa fresada, trilha a 45 graus, via e a ponta V.
+"""Desenha o icone do plugin: o que um ROTEADOR faz, nas cores do KiCad.
+
+Um barramento de tres trilhas azuis (face de baixo) dobrando a 45 graus, e uma
+trilha vermelha (face de cima) que atravessa o barramento descendo e subindo por
+duas vias - o pulo de face que o roteador faz para cruzar. Fundo escuro de
+canvas do KiCad. A primeira versao tinha uma fresa e parecia gerador de G-code.
 
 Desenha grande (512 px) e reduz com filtro bom, para o icone de 24 px da barra
 do KiCad sair liso. Gera tambem a versao para tema escuro e a de 64 px que o
@@ -14,13 +19,12 @@ from PIL import Image, ImageDraw
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 G = 512                       # tela de trabalho
 
-PLACA = (22, 92, 64)          # FR-4 verde
-PLACA_BORDA = (12, 60, 42)
-COBRE = (232, 140, 52)
-COBRE_ESCURO = (170, 92, 30)
-FURO = (16, 40, 30)
-FRESA = (214, 222, 230)
-FRESA_SOMBRA = (86, 98, 112)
+FUNDO = (14, 24, 40)          # canvas escuro do KiCad
+FUNDO_BORDA = (40, 58, 86)
+BAIXO = (66, 132, 230)        # B.Cu
+CIMA = (226, 62, 62)          # F.Cu
+ILHA = (214, 170, 72)         # pad/via
+FURO = (14, 24, 40)
 
 
 def s(v):
@@ -35,46 +39,35 @@ def trilha(d, pontos, largura, cor):
         d.ellipse((x - r, y - r, x + r, y + r), fill=cor)
 
 
+def ilha(d, x, y, r, furo):
+    d.ellipse((s(x - r), s(y - r), s(x + r), s(y + r)), fill=ILHA)
+    d.ellipse((s(x - furo), s(y - furo), s(x + furo), s(y + furo)), fill=FURO)
+
+
 def desenha(fundo_escuro=False):
     img = Image.new("RGBA", (G, G), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    # placa: quadrado arredondado, deixando o canto de cima livre para a fresa
-    d.rounded_rectangle((s(2), s(16), s(84), s(98)), radius=s(14),
-                        fill=PLACA, outline=PLACA_BORDA, width=s(3))
+    d.rounded_rectangle((s(1), s(1), s(99), s(99)), radius=s(18), fill=FUNDO,
+                        outline=(120, 150, 196) if fundo_escuro else FUNDO_BORDA,
+                        width=s(2.5))
 
-    # trilha a 45 graus: entra pela esquerda, sobe na diagonal e chega na via
-    caminho = [(10, 84), (28, 84), (48, 64), (48, 56)]
-    trilha(d, caminho, 15, COBRE_ESCURO)          # sulco da fresa em volta
-    trilha(d, caminho, 10, COBRE)
-    trilha(d, [(10, 64), (20, 64), (30, 54)], 10, COBRE)
+    # barramento na face de baixo: tres trilhas paralelas, dobra a 45 graus
+    passo = 15
+    for k in range(3):
+        y0 = 22 + passo * k
+        y1 = y0 + 26
+        trilha(d, [(14, y0), (36, y0), (62, y1 - 0), (86, y1)], 8.5, BAIXO)
+    for k in range(3):                     # pads nas pontas
+        y0 = 22 + passo * k
+        ilha(d, 14, y0, 6.5, 2.6)
+        ilha(d, 86, y0 + 26, 6.5, 2.6)
 
-    # via: ilha grande com furo, como na bancada
-    cx, cy, r = 48, 46, 14
-    d.ellipse((s(cx - r), s(cy - r), s(cx + r), s(cy + r)), fill=COBRE,
-              outline=COBRE_ESCURO, width=s(2.5))
-    d.ellipse((s(cx - 5.5), s(cy - 5.5), s(cx + 5.5), s(cy + 5.5)), fill=FURO)
-
-    # fresa de ponta V, inteira, no canto de cima a direita
-    x0, x1, topo, base, ponta = 70, 96, 2, 36, 62
-    meio = (x0 + x1) / 2.0
-    d.rounded_rectangle((s(x0), s(topo), s(x1), s(base)), radius=s(3),
-                        fill=FRESA, outline=FRESA_SOMBRA, width=s(2.5))
-    d.polygon([(s(x0), s(base)), (s(x1), s(base)), (s(meio), s(ponta))],
-              fill=FRESA, outline=FRESA_SOMBRA)
-    d.line([(s(meio), s(base)), (s(meio), s(ponta - 2))], fill=FRESA_SOMBRA, width=s(3))
-    for y in (12, 25):                            # helice
-        d.line([(s(x0 + 1), s(y + 5)), (s(x1 - 1), s(y - 3))],
-               fill=FRESA_SOMBRA, width=s(3.5))
-    # cavaco de cobre saltando da ponta
-    for dx, dy, rr in ((-9, 4, 2.4), (8, 6, 2.0), (-4, 10, 1.8)):
-        x, y = meio + dx, ponta + dy
-        d.ellipse((s(x - rr), s(y - rr), s(x + rr), s(y + rr)), fill=COBRE)
-
-    if fundo_escuro:
-        # no tema escuro a borda da placa some; um contorno claro devolve a forma
-        d.rounded_rectangle((s(2), s(16), s(84), s(98)), radius=s(14),
-                            outline=(90, 170, 130), width=s(2.5))
+    # face de cima: cruza o barramento entre duas vias
+    vx, va, vb = 48, 14, 86
+    trilha(d, [(vx, va), (vx, vb)], 8.5, CIMA)
+    ilha(d, vx, va, 7.5, 3.0)
+    ilha(d, vx, vb, 7.5, 3.0)
     return img
 
 

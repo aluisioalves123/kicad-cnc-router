@@ -18,7 +18,7 @@ import time
 import zipfile
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-VERSAO = "1.0.1"
+VERSAO = "1.0.2"
 IDENTIFICADOR = "com.github.aluisioalves123.cncrouter"
 REPO = "aluisioalves123/kicad-cnc-router"
 PAGINA = "https://github.com/" + REPO
