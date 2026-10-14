@@ -870,6 +870,10 @@ typedef struct {
     /* pecas com pad nas ligacoes que a vencedora deixou abertas: e nelas que o
      * sorteio de reparo mexe */
     unsigned char *culpadas;
+    /* Busca sistematica: poses a testar para as culpadas da vencedora, uma de
+     * cada vez, partindo dela. Refeita a cada vencedora nova. */
+    struct Pose { int peca; double x, y, giro; int lado; } *lista;
+    int n_lista, prox_lista, cap_lista;
     int n_culpadas;
     double *peso;                /* por rede: quem nao fecha pesa mais no custo */
     int descartados, julgados;
@@ -904,6 +908,60 @@ static int melhor_que(int ab, int faixa, double perda, int nv, double fio,
     return fio < g->melhor_fio - 1e-6;
 }
 
+/* Busca sistematica em volta das culpadas.
+ *
+ * O salto aleatorio (perturba) sorteia lugar na placa inteira: mais da metade cai
+ * em pose ilegal, e a regiao que desfaz o cruzamento - o J1 junto da ponta de
+ * baixo do Nano, no interfone - e pequena demais para ser acertada assim. Aqui
+ * cada culpada passa por uma grade de 2,5 mm num raio de 15 mm em volta de onde
+ * esta, nos 4 giros (e nos 2 lados, se pode virar), uma pose por vez, o resto da
+ * vencedora parado. Embaralhada, para os nucleos varrerem a regiao toda por
+ * igual em vez de esgotar um canto primeiro. */
+#define SIST_RAIO   15.0
+#define SIST_PASSO   2.5
+
+static void monta_lista(Sorteio *g, const Ctx *c, unsigned long long *s)
+{
+    int i, n = 0, passos = (int)(SIST_RAIO / SIST_PASSO);
+    g->n_lista = 0;
+    g->prox_lista = 0;
+    for (i = 0; i < c->n_pecas; i++) {
+        const PbPeca *p = &c->pecas[i];
+        int dx, dy, gi, la;
+        if (!g->culpadas[i] || !p->movel) continue;
+        for (dy = -passos; dy <= passos; dy++)
+            for (dx = -passos; dx <= passos; dx++) {
+                if (dx * dx + dy * dy > passos * passos) continue;
+                for (gi = 0; gi < 4; gi++)
+                    for (la = 0; la < (p->pode_virar ? 2 : 1); la++) {
+                        struct Pose *q;
+                        if (n == g->cap_lista) {
+                            int cap = g->cap_lista ? g->cap_lista * 2 : 1024;
+                            struct Pose *novo = (struct Pose *)realloc(g->lista,
+                                                    (size_t)cap * sizeof(struct Pose));
+                            if (!novo) goto pronto;
+                            g->lista = novo;
+                            g->cap_lista = cap;
+                        }
+                        q = &g->lista[n++];
+                        q->peca = i;
+                        q->x = arredonda(p->x + dx * SIST_PASSO);
+                        q->y = arredonda(p->y + dy * SIST_PASSO);
+                        q->giro = 90.0 * gi;
+                        q->lado = p->pode_virar ? la : p->lado;
+                    }
+            }
+    }
+pronto:
+    for (i = n - 1; i > 0; i--) {           /* embaralha */
+        int j = (int)(proximo(s) % (unsigned long long)(i + 1));
+        struct Pose t = g->lista[i];
+        g->lista[i] = g->lista[j];
+        g->lista[j] = t;
+    }
+    g->n_lista = n;
+}
+
 static int sorteio_continua(const Sorteio *g)
 {
     if (g->acabou || g->placar->parar) return 0;
@@ -932,7 +990,7 @@ static void trabalha(void *arg)
     c.caixas = (double *)malloc((size_t)c.n_pecas * 4 * sizeof(double));
 
     for (;;) {
-        int k, ab, nv, reparo;
+        int k, ab, nv, reparo, sistematico;
         double fio, perda;
         unsigned long long s;
         int faixa, perde;
@@ -943,18 +1001,31 @@ static void trabalha(void *arg)
         memcpy(peso, g->peso, (size_t)nr * sizeof(double));
         /* metade dos sorteios, enquanto sobrar ligacao aberta, e de REPARO:
          * parte da melhor posicao e mexe so nas pecas culpadas */
-        reparo = g->melhor_ab > 0 && g->n_culpadas > 0 && (k % 2 == 1);
-        if (reparo) {
+        sistematico = g->melhor_ab > 0 && g->prox_lista < g->n_lista;
+        if (sistematico) {
+            /* a vencedora com UMA peca culpada numa pose da grade */
+            const struct Pose *q = &g->lista[g->prox_lista++];
             memcpy(pecas, g->pose_vencedora, (size_t)c.n_pecas * sizeof(PbPeca));
-            memcpy(culpadas, g->culpadas, (size_t)c.n_pecas);
+            pecas[q->peca].x = q->x; pecas[q->peca].y = q->y;
+            pecas[q->peca].giro = q->giro; pecas[q->peca].lado = q->lado;
+            reparo = 0;
+        } else {
+            reparo = g->melhor_ab > 0 && g->n_culpadas > 0 && (k % 2 == 1);
+            if (reparo) {
+                memcpy(pecas, g->pose_vencedora, (size_t)c.n_pecas * sizeof(PbPeca));
+                memcpy(culpadas, g->culpadas, (size_t)c.n_pecas);
+            }
         }
         destranca(&g->trava);
 
-        if (!reparo) memcpy(pecas, g->inicial, (size_t)c.n_pecas * sizeof(PbPeca));
+        if (!reparo && !sistematico)
+            memcpy(pecas, g->inicial, (size_t)c.n_pecas * sizeof(PbPeca));
         s = g->semente ^ ((unsigned long long)k * 0x9E3779B97F4A7C15ULL);
         if (!s) s = 1;
         proximo(&s);
-        if (reparo) {
+        if (sistematico) {
+            /* nada a recozer: a pose e exatamente a da grade (ilegal sai ja) */
+        } else if (reparo) {
             /* a peca que saltou fica CONGELADA no lugar novo: o recozimento, que
              * so enxerga fio, a puxava de volta para o mesmo canal apertado */
             perturba(&c, culpadas, &s, movidas);
@@ -998,6 +1069,7 @@ static void trabalha(void *arg)
             g->vencedor = k;
             memcpy(g->pose_vencedora, pecas, (size_t)c.n_pecas * sizeof(PbPeca));
             marca_culpadas(&c, falhas, g->culpadas, &g->n_culpadas);
+            if (ab > 0) monta_lista(g, &c, &s);
         }
         /* sem plano, fechou e conector na periferia: pronto. Com plano, ainda
          * da para perder menos plano - segue ate parar de melhorar */
@@ -1138,6 +1210,12 @@ int pb_posiciona(const PbRegras *r,
     for (i = 0; i < c->n_redes; i++)
         if (falhas[i]) g.peso[i] += PESO_POR_FALHA * falhas[i];
     marca_culpadas(c, falhas, g.culpadas, &g.n_culpadas);
+    if (g.melhor_ab > 0) {
+        unsigned long long s0 = g.semente ^ 0x5DEECE66DULL;
+        c->pecas = g.pose_vencedora;
+        monta_lista(&g, c, &s0);
+        c->pecas = pecas;
+    }
     g.placar = placar;
     placar->abertas_antes = placar->abertas_depois = g.melhor_ab;
     placar->vias = g.melhor_vias;
@@ -1172,6 +1250,7 @@ int pb_posiciona(const PbRegras *r,
     free(fios); free(falhas); free(g.peso);
     free((PbPeca *)g.inicial); free(g.pose_vencedora); free(c->redes);
     free(g.culpadas);
+    free(g.lista);
     free(c->casco); free(n_casco); free(c->mundo); free(c->caixas);
     return g.melhor_ab;
 }
