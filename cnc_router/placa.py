@@ -130,6 +130,24 @@ class Ligacao:
 
 
 @dataclass
+class Plano:
+    """Zona de cobre com rede: o plano (de GND, quase sempre).
+
+    Na fresa e o cobre que sobra depois da isolacao, ligado a uma rede. Pad dessa
+    rede encostado no plano ja esta ligado - o roteador so costura os pedacos que
+    as outras trilhas separam."""
+
+    rede: int
+    rede_nome: str
+    camada: str
+    poligono: list
+    # Plano em cima ligado a pad pelo alivio termico = solda do lado dos
+    # componentes, o que o projeto proibe. So conta se a ligacao com pad estiver
+    # desligada (ai ele so liga por via).
+    liga_pads: bool = True
+
+
+@dataclass
 class Placa:
     nome: str
     contorno: list = field(default_factory=list)   # poligono em mm
@@ -140,6 +158,7 @@ class Placa:
     pecas: list = field(default_factory=list)
     pads: list = field(default_factory=list)
     proibidas: list = field(default_factory=list)
+    planos: list = field(default_factory=list)
     trilhas: list = field(default_factory=list)
     vias: list = field(default_factory=list)
     abertas: int = 0
@@ -330,6 +349,21 @@ def ler(board) -> Placa:
                             (x - ox) * math.sin(a) + (y - oy) * math.cos(a))
                            for x, y in pontos]
             p.proibidas.append(z)
+
+    for zona in board.Zones():
+        if zona.GetIsRuleArea() or zona.GetNetCode() <= 0:
+            continue
+        forma = zona.Outline()
+        for camada in zona.GetLayerSet().CuStack():
+            for i in range(forma.OutlineCount()):
+                c = forma.Outline(i)
+                p.planos.append(Plano(
+                    rede=zona.GetNetCode(), rede_nome=zona.GetNetname(),
+                    camada=board.GetLayerName(camada),
+                    poligono=[(mm(c.CPoint(k).x), mm(c.CPoint(k).y))
+                              for k in range(c.PointCount())],
+                    liga_pads=zona.GetPadConnection() != pcbnew.ZONE_CONNECTION_NONE,
+                ))
 
     for t in board.Tracks():
         if t.GetClass() == "PCB_VIA":

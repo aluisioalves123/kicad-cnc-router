@@ -277,6 +277,20 @@ class Janela(wx.Dialog):
         L.append("  ligacoes abertas .. %d" % p.abertas)
         L.append("")
 
+        L.append("PLANOS: %d" % len(p.planos))
+        for z in p.planos:
+            if z.camada == "B.Cu" and z.liga_pads:
+                uso = "liga os pads - o roteador so costura os pedacos"
+            elif z.camada == "B.Cu":
+                uso = "nao liga pads (conexao desligada): nao ajuda o roteador"
+            elif z.liga_pads:
+                uso = ("ATENCAO: liga pads pela face de CIMA = solda do lado dos "
+                       "componentes. Desligue a conexao com pads desse plano")
+            else:
+                uso = "em cima, so por via: o roteador faz trilha normal"
+            L.append("  %s no %s | %s" % (z.rede_nome, z.camada, uso))
+        L.append("")
+
         L.append("AREAS PROIBIDAS: %d" % len(p.proibidas))
         for z in p.proibidas:
             barra = ", ".join(n for n, v in (("trilha", z.sem_trilha),

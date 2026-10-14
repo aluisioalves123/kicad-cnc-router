@@ -24,11 +24,15 @@ typedef struct {
     int *indices;        /* posicoes em `alvos` */
     int falhas;          /* ligacoes desta rede que nao fecharam, somadas nas passadas */
     unsigned long long chave;   /* ordem entre redes com a mesma contagem de falhas */
+    int plano;           /* 1 = tem plano: vai por ultimo, quando o plano ja se sabe */
 } Rede;
 
 static int compara_redes(const void *a, const void *b)
 {
     const Rede *ra = (const Rede *)a, *rb = (const Rede *)b;
+    /* rede de plano por ultimo: o plano e o cobre que SOBRA, e so da para saber
+     * o que sobra depois que as outras redes passaram */
+    if (ra->plano != rb->plano) return ra->plano - rb->plano;
     if (ra->falhas != rb->falhas) return rb->falhas - ra->falhas;  /* quem falhou, antes */
     if (ra->chave != rb->chave) return ra->chave < rb->chave ? -1 : 1;
     return ra->rede - rb->rede;
@@ -121,6 +125,143 @@ static void pinta_trecho(PbMapa *m, const PbSeg *segs, int de, int ate,
     (void)folga;
 }
 
+/* ------------------------------------------------------------------ plano */
+
+static const int DC8[8] = { 1, 1, 0, -1, -1, -1,  0,  1 };   /* par = reto, impar = 45 */
+static const int DL8[8] = { 0, 1, 1,  1,  0, -1, -1, -1 };
+
+static int plano_da_rede(const PbMapa *m, int rede)
+{
+    int i;
+    for (i = 0; i < m->n_planos; i++)
+        if (m->plano_rede[i] == rede && m->plano_face[i] == 1) return i;
+    return -1;
+}
+
+static int acha(int *pai, int x)
+{
+    while (pai[x] != x) { pai[x] = pai[pai[x]]; x = pai[x]; }
+    return x;
+}
+
+static void une(int *pai, int a, int b)
+{
+    a = acha(pai, a); b = acha(pai, b);
+    if (a != b) pai[b] = a;
+}
+
+typedef struct {
+    int *rotulo;     /* por celula: pedaco do plano, -1 = sem plano */
+    int n_pedacos;
+    int *pai;        /* pedacos 0..n-1 e pads n..n+r->n-1, unidos se ligam */
+} Pedacos;
+
+/* O plano e o cobre que sobra: celula dentro da zona e livre de qualquer cobre
+ * alheio no mapa INFLADO. E conservador de proposito (o mapa inflado guarda
+ * meia trilha + folga, mais que a folga da zona): o plano de verdade sai mais
+ * largo, nunca mais estreito, do que a conta acha.
+ *
+ * Pedacos separados pelas trilhas sao rotulados (vizinhanca de 4: dois pedacos
+ * que so se tocam na quina NAO se ligam no cobre). E cada pad da rede so conta
+ * como ligado a um pedaco se o alivio termico fecha: andando do centro do pad
+ * para fora, pelo menos DOIS raios (retos, ou a 45) encontram plano. Um raio so
+ * e o que o DRC do KiCad chama de alivio termico faminto. */
+static void pedacos_do_plano(PbMapa *m, int ip, const Rede *r, const PbAlvo *alvos,
+                             Pedacos *pd)
+{
+    int cols = m->colunas, lins = m->linhas, face = m->plano_face[ip];
+    int rede = m->plano_rede[ip];
+    size_t n = (size_t)cols * lins, i;
+    const unsigned char *regiao = m->plano_regiao[ip];
+    int *fila = (int *)malloc(n * sizeof(int));
+    int k;
+
+    pd->rotulo = (int *)malloc(n * sizeof(int));
+    pd->n_pedacos = 0;
+    for (i = 0; i < n; i++) pd->rotulo[i] = -1;
+    for (i = 0; i < n; i++) {
+        int ini = 0, fim = 0;
+        if (pd->rotulo[i] >= 0 || !regiao[i] || m->celulas[i * 2 + face] != PB_LIVRE)
+            continue;
+        fila[fim++] = (int)i;
+        pd->rotulo[i] = pd->n_pedacos;
+        while (ini < fim) {
+            int cel = fila[ini++], c = cel % cols, l = cel / cols, d;
+            for (d = 0; d < 8; d += 2) {
+                int nc = c + DC8[d], nl = l + DL8[d], v;
+                if (nc < 0 || nl < 0 || nc >= cols || nl >= lins) continue;
+                v = nl * cols + nc;
+                if (pd->rotulo[v] < 0 && regiao[v] && m->celulas[v * 2 + face] == PB_LIVRE) {
+                    pd->rotulo[v] = pd->n_pedacos;
+                    fila[fim++] = v;
+                }
+            }
+        }
+        pd->n_pedacos++;
+    }
+    free(fila);
+
+    pd->pai = (int *)malloc((size_t)(pd->n_pedacos + r->n) * sizeof(int));
+    for (k = 0; k < pd->n_pedacos + r->n; k++) pd->pai[k] = k;
+    for (k = 0; k < r->n; k++) {
+        const PbAlvo *a = &alvos[r->indices[k]];
+        int bate[8], retos = 0, tortos = 0, d;
+        for (d = 0; d < 8; d++) {
+            int c = a->c, l = a->l, passos = 0;
+            bate[d] = -1;
+            while (passos < 200 && c >= 0 && l >= 0 && c < cols && l < lins
+                   && m->celulas[(l * cols + c) * 2 + face] == rede) {
+                c += DC8[d]; l += DL8[d]; passos++;
+            }
+            if (c >= 0 && l >= 0 && c < cols && l < lins)
+                bate[d] = pd->rotulo[l * cols + c];
+            if (bate[d] >= 0) { if (d % 2 == 0) retos++; else tortos++; }
+        }
+        for (d = 0; d < 8; d++)
+            if (bate[d] >= 0 && ((d % 2 == 0 && retos >= 2) || (d % 2 == 1 && tortos >= 2)))
+                une(pd->pai, pd->n_pedacos + k, bate[d]);
+    }
+}
+
+/* Junta ao que ja esta ligado o grupo `g` inteiro: os pads dele e todo o plano
+ * dele viram ponto de partida. Devolve quantos pads entraram agora. */
+static int junta_grupo(const PbMapa *m, int ip, Pedacos *pd, int g, const Rede *r,
+                       const PbAlvo *alvos, char *ligado,
+                       int *origens, int *n_origens, int max_origens)
+{
+    int k, entraram = 0, face = m->plano_face[ip];
+    size_t i, n = (size_t)m->colunas * m->linhas;
+    for (k = 0; k < r->n; k++) {
+        int idx = r->indices[k];
+        if (ligado[idx] || acha(pd->pai, pd->n_pedacos + k) != g) continue;
+        ligado[idx] = 1;
+        entraram++;
+        if (*n_origens < max_origens) {
+            origens[*n_origens * 3 + 0] = alvos[idx].c;
+            origens[*n_origens * 3 + 1] = alvos[idx].l;
+            origens[*n_origens * 3 + 2] = 1;
+            (*n_origens)++;
+        }
+    }
+    for (i = 0; i < n && *n_origens < max_origens; i++) {
+        if (pd->rotulo[i] < 0 || acha(pd->pai, pd->rotulo[i]) != g) continue;
+        pd->rotulo[i] = -1;                    /* ja entrou: nao entra de novo */
+        origens[*n_origens * 3 + 0] = (int)(i % (size_t)m->colunas);
+        origens[*n_origens * 3 + 1] = (int)(i / (size_t)m->colunas);
+        origens[*n_origens * 3 + 2] = face;
+        (*n_origens)++;
+    }
+    return entraram;
+}
+
+static int grupo_do_pad(Pedacos *pd, const Rede *r, int idx)
+{
+    int k;
+    for (k = 0; k < r->n; k++)
+        if (r->indices[k] == idx) return acha(pd->pai, pd->n_pedacos + k);
+    return -1;
+}
+
 /* Uma passada: roteia as redes na ordem em que estao em `redes`. Conta em cada
  * rede quantas ligacoes dela nao fecharam - e isso que a proxima passada usa
  * para decidir quem vai primeiro. */
@@ -131,23 +272,90 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
                        PbAberta *abertas, int max_abertas,
                        int *n_segs_out, int *n_vias_out, int *n_abertas_out,
                        int *caminho, int max_caminho, int *origens, char *ligado,
-                       int teto)
+                       int teto, char *falhou)
 {
     int i, j, ligadas = 0, n_origens;
     int n_segs = 0, n_vias = 0, n_abertas = 0;
+    int *pares = (int *)malloc((size_t)(n_alvos > 0 ? n_alvos : 1) * 2 * sizeof(int));
+    int n_pares = 0;
+
+    /* Pad de plano que ficou sem ligacao numa passada anterior vai PRIMEIRO, com
+     * trilha ate o pad da mesma rede mais perto. Rede de plano roteia por ultimo,
+     * e as outras redes cercavam o pad antes de o plano chegar nele: sem passagem
+     * nem para a trilha de costura. Isto e o rip-up da rede de plano. */
+    for (j = 0; j < n_redes; j++) {
+        Rede *r = &redes[j];
+        if (plano_da_rede(m, r->rede) < 0) continue;
+        for (i = 0; i < r->n; i++) {
+            int a = r->indices[i], b = -1, k, n, orig[3], dest[3];
+            double melhor_d = 1e30;
+            if (!falhou[a]) continue;
+            for (k = 0; k < r->n; k++) {
+                int x = r->indices[k];
+                double dc, dl, d;
+                if (x == a) continue;
+                dc = alvos[x].c - alvos[a].c; dl = alvos[x].l - alvos[a].l;
+                d = dc * dc + dl * dl;
+                if (d < melhor_d) { melhor_d = d; b = x; }
+            }
+            if (b < 0) continue;
+            orig[0] = alvos[a].c; orig[1] = alvos[a].l; orig[2] = 1;
+            dest[0] = alvos[b].c; dest[1] = alvos[b].l; dest[2] = 1;
+            n = pb_roteia(m, r->rede, orig, 1, dest, 1, caminho, max_caminho * 4);
+            if (n < 0) continue;            /* fica para a fase do plano */
+            {
+                int s0 = n_segs, v0 = n_vias;
+                em_segmentos(caminho, n, r->rede, segs, &n_segs, max_segs,
+                             vias, &n_vias, max_vias);
+                pinta_trecho(m, segs, s0, n_segs, vias, v0, n_vias);
+            }
+            pares[n_pares * 2] = a;
+            pares[n_pares * 2 + 1] = b;
+            n_pares++;
+        }
+    }
 
     for (j = 0; j < n_redes; j++) {
         Rede *r = &redes[j];
-        int restantes;
+        int restantes, ip = plano_da_rede(m, r->rede);
+        Pedacos pd;
         if (r->n < 2) continue;
 
         memset(ligado, 0, (size_t)n_alvos);
-        ligado[r->indices[0]] = 1;
-        n_origens = 1;
-        origens[0] = alvos[r->indices[0]].c;
-        origens[1] = alvos[r->indices[0]].l;
-        origens[2] = 1;                     /* chegada sempre pela face de baixo */
-        restantes = r->n - 1;
+        if (ip >= 0) {
+            /* rede de plano: comeca do maior grupo (pads que o plano ja liga),
+             * com o plano inteiro dele como ponto de partida */
+            int k, g0 = -1, mais = 0, entraram;
+            pedacos_do_plano(m, ip, r, alvos, &pd);
+            /* pads que a trilha de costura ja juntou sao um grupo so */
+            for (k = 0; k < n_pares; k++) {
+                int q, ka = -1, kb = -1;
+                for (q = 0; q < r->n; q++) {
+                    if (r->indices[q] == pares[k * 2]) ka = q;
+                    if (r->indices[q] == pares[k * 2 + 1]) kb = q;
+                }
+                if (ka >= 0 && kb >= 0)
+                    une(pd.pai, pd.n_pedacos + ka, pd.n_pedacos + kb);
+            }
+            for (k = 0; k < r->n; k++) {
+                int g = acha(pd.pai, pd.n_pedacos + k), q, conta = 0;
+                for (q = 0; q < r->n; q++)
+                    if (acha(pd.pai, pd.n_pedacos + q) == g) conta++;
+                if (conta > mais) { mais = conta; g0 = g; }
+            }
+            n_origens = 0;
+            entraram = junta_grupo(m, ip, &pd, g0, r, alvos, ligado,
+                                   origens, &n_origens, max_caminho);
+            restantes = r->n - entraram;
+            ligadas += entraram - 1;
+        } else {
+            ligado[r->indices[0]] = 1;
+            n_origens = 1;
+            origens[0] = alvos[r->indices[0]].c;
+            origens[1] = alvos[r->indices[0]].l;
+            origens[2] = 1;                 /* chegada sempre pela face de baixo */
+            restantes = r->n - 1;
+        }
 
         while (restantes > 0) {
             int melhor = -1, n;
@@ -182,10 +390,24 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
                     n_abertas++;
                 }
                 r->falhas++;
-                ligado[melhor] = 1;
-                restantes--;
+                if (ip >= 0) {
+                    falhou[melhor] = 1;     /* na proxima passada, vai primeiro */
+                    /* o grupo dele inteiro fica de fora: uma ligacao aberta */
+                    int g = grupo_do_pad(&pd, r, melhor), k;
+                    for (k = 0; k < r->n; k++)
+                        if (!ligado[r->indices[k]]
+                                && acha(pd.pai, pd.n_pedacos + k) == g) {
+                            ligado[r->indices[k]] = 1;
+                            restantes--;
+                        }
+                } else {
+                    ligado[melhor] = 1;
+                    restantes--;
+                }
                 /* ja perdeu para uma passada anterior: nao adianta terminar */
                 if (teto >= 0 && n_abertas > teto) {
+                    if (ip >= 0) { free(pd.rotulo); free(pd.pai); }
+                    free(pares);
                     *n_segs_out = n_segs;
                     *n_vias_out = n_vias;
                     *n_abertas_out = n_abertas;
@@ -208,11 +430,22 @@ static int uma_passada(PbMapa *m, const PbAlvo *alvos, int n_alvos,
                 origens[n_origens * 3 + 2] = caminho[i * 4 + 2];
                 n_origens++;
             }
-            ligado[melhor] = 1;
-            restantes--;
-            ligadas++;
+            if (ip >= 0) {
+                /* chegou no pad: o grupo dele (pads e plano) entra junto */
+                int g = grupo_do_pad(&pd, r, melhor), entraram;
+                entraram = junta_grupo(m, ip, &pd, g, r, alvos, ligado,
+                                       origens, &n_origens, max_caminho);
+                restantes -= entraram;
+                ligadas += entraram;
+            } else {
+                ligado[melhor] = 1;
+                restantes--;
+                ligadas++;
+            }
         }
+        if (ip >= 0) { free(pd.rotulo); free(pd.pai); }
     }
+    free(pares);
 
     *n_segs_out = n_segs;
     *n_vias_out = n_vias;
@@ -260,7 +493,7 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
     int n_redes = 0, i, j, passada, passadas, melhor_passada = -1, ultima = -1;
     int *caminho = NULL, max_caminho = 200000;
     int *origens = NULL;
-    char *ligado = NULL;
+    char *ligado = NULL, *falhou = NULL;
     int *base = NULL;
     size_t n_celulas = (size_t)m->colunas * m->linhas * 2;
     PbSeg *t_segs = NULL;
@@ -302,6 +535,7 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
     t_abertas = (PbAberta *)malloc((size_t)(max_abertas > 0 ? max_abertas : 1)
                                    * sizeof(PbAberta));
     memcpy(base, m->celulas, n_celulas * sizeof(int));
+    falhou = (char *)calloc((size_t)n_alvos, 1);
 
     passadas = m->regras.tentativas > 0 ? m->regras.tentativas : 1;
     for (passada = 0; passada < passadas; passada++) {
@@ -310,6 +544,8 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
 
         /* ordem: quem falhou vai na frente; o resto, nas duas primeiras passadas,
          * por numero de pads (mais pads primeiro); da terceira em diante, sorteado */
+        for (j = 0; j < n_redes; j++)
+            redes[j].plano = plano_da_rede(m, redes[j].rede) >= 0;
         for (j = 0; j < n_redes; j++)
             redes[j].chave = passada < 2
                 ? ((unsigned long long)(1000000 - redes[j].n) << 32)
@@ -324,7 +560,7 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
         lig = uma_passada(m, alvos, n_alvos, redes, n_redes,
                           t_segs, max_segs, t_vias, max_vias, t_abertas, max_abertas,
                           &ns, &nv, &na, caminho, max_caminho, origens, ligado,
-                          melhor_passada < 0 ? -1 : melhor_na);
+                          melhor_passada < 0 ? -1 : melhor_na, falhou);
         ultima = passada;
         fio = fio_de(m, t_segs, ns);
         if (melhor_passada < 0 || na < melhor_na
@@ -349,7 +585,7 @@ int pb_roteia_tudo(PbMapa *m, const PbAlvo *alvos, int n_alvos,
 
     for (j = 0; j < n_redes; j++) free(redes[j].indices);
     free(redes); free(caminho); free(origens); free(ligado); free(base);
-    free(t_segs); free(t_vias); free(t_abertas);
+    free(t_segs); free(t_vias); free(t_abertas); free(falhou);
 
     *n_segs_out = melhor_ns;
     *n_vias_out = melhor_nv;

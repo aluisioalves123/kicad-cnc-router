@@ -84,6 +84,8 @@ typedef struct {
     double bx0, by0, bx1, by1;          /* caixa do contorno */
     const PbProibida *proibidas;
     int n_proibidas;
+    const PbPlano *planos;
+    int n_planos;
     PbPeca *pecas;
     int n_pecas;
     const PbPadC *pads;
@@ -647,6 +649,7 @@ static int julga(const Ctx *c, double x0, double y0, double larg, double alt,
         }
     }
     pb_pinta(m, formas, nf);
+    pb_define_planos(m, c->planos, c->n_planos);
 
     segs = (PbSeg *)malloc(20000 * sizeof(PbSeg));
     vias = (PbViaOut *)malloc(4000 * sizeof(PbViaOut));
@@ -863,6 +866,7 @@ int pb_posiciona(const PbRegras *r,
                  double x0, double y0, double larg, double alt,
                  const double *contorno, int n_contorno,
                  const PbProibida *proibidas, int n_proibidas,
+                 const PbPlano *planos, int n_planos,
                  PbPeca *pecas, int n_pecas,
                  const PbPadC *pads, int n_pads,
                  int candidatos, int passos, unsigned long long semente,
@@ -878,6 +882,7 @@ int pb_posiciona(const PbRegras *r,
     memset(&g, 0, sizeof(g));
     c->r = r;
     c->proibidas = proibidas; c->n_proibidas = n_proibidas;
+    c->planos = planos; c->n_planos = n_planos;
     c->pecas = pecas; c->n_pecas = n_pecas;
     c->pads = pads; c->n_pads = n_pads;
 

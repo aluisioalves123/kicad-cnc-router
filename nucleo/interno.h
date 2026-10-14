@@ -8,6 +8,8 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#define PB_MAX_PLANOS 8
+
 struct PbMapa {
     PbRegras regras;
     double x0, y0;
@@ -30,6 +32,13 @@ struct PbMapa {
      * gigabytes de escrita, e 12 threads disputando a memoria rendiam o mesmo
      * que 4. O carimbo diz se o valor e DESTA busca: valor de busca velha conta
      * como nunca visto, entao nada precisa ser zerado entre uma e outra. */
+    /* Planos registrados (pb_define_planos): rede, face e, por celula, se a
+     * celula fica dentro da zona do plano. */
+    int n_planos;
+    int plano_rede[PB_MAX_PLANOS];
+    int plano_face[PB_MAX_PLANOS];
+    unsigned char *plano_regiao[PB_MAX_PLANOS];
+
     float *g;
     int *veio;
     unsigned *carimbo;   /* 2*busca: aberto nesta busca; 2*busca+1: fechado */

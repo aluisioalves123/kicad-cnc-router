@@ -95,6 +95,7 @@ def monta_mapa(placa, regras, custos: Custos = None):
                                      x=x1, y=y1, larg=x2, alt=y2, giro=larg))
 
     m.pinta(formas)
+    m.define_planos(placa.planos)
     return m
 
 
@@ -171,6 +172,7 @@ def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=
                                          sem_footprint=int(z.sem_footprint),
                                          n_pontos=len(z.poligono), pontos=pts)
 
+    planos = nativo.planos_para_c(placa.planos)
     if placar is None:
         placar = nativo.PbPlacar()
     lib.pb_posiciona(ctypes.byref(rc),
@@ -178,6 +180,7 @@ def posiciona(placa, regras, segundos=120.0, candidatos=0, passos=3000, semente=
                      placa.largura + 2 * margem, placa.altura + 2 * margem,
                      contorno, len(placa.contorno),
                      proibidas, len(paradas),
+                     planos, planos._n,
                      pecas, len(placa.pecas), pads, len(placa.pads),
                      candidatos, passos, semente, float(segundos), nucleos,
                      ctypes.byref(placar))

@@ -223,6 +223,10 @@ void pb_destroi(PbMapa *m)
     free(m->g);
     free(m->veio);
     free(m->carimbo);
+    {
+        int i;
+        for (i = 0; i < m->n_planos; i++) free(m->plano_regiao[i]);
+    }
     free(m);
 }
 
@@ -265,6 +269,29 @@ void pb_pinta(PbMapa *m, const PbForma *formas, int quantas)
     }
     /* o mapa mudou: o que o roteador sabia sobre onde cabe via envelheceu */
     m->soma_da_rede = -999999;
+}
+
+int pb_define_planos(PbMapa *m, const PbPlano *planos, int quantos)
+{
+    int i, c, l;
+    for (i = 0; i < m->n_planos; i++) free(m->plano_regiao[i]);
+    m->n_planos = 0;
+    for (i = 0; i < quantos && m->n_planos < PB_MAX_PLANOS; i++) {
+        const PbPlano *p = &planos[i];
+        unsigned char *r;
+        if (p->n_pontos < 3 || p->face < 0 || p->face > 1) continue;
+        r = (unsigned char *)calloc((size_t)m->colunas * m->linhas, 1);
+        if (!r) break;
+        for (l = 0; l < m->linhas; l++)
+            for (c = 0; c < m->colunas; c++)
+                if (dentro(pb_x_de(m, c), pb_y_de(m, l), p->pontos, p->n_pontos))
+                    r[l * m->colunas + c] = 1;
+        m->plano_rede[m->n_planos] = p->rede;
+        m->plano_face[m->n_planos] = p->face;
+        m->plano_regiao[m->n_planos] = r;
+        m->n_planos++;
+    }
+    return m->n_planos;
 }
 
 int pb_abi(void) { return PB_ABI; }

@@ -27,7 +27,9 @@ def _violacoes(caminho):
     if not os.path.exists(KICAD_CLI):
         return None
     saida = os.path.join(tempfile.gettempdir(), "cnc_router_drc.json")
-    subprocess.run([KICAD_CLI, "pcb", "drc", "--format", "json",
+    # --refill-zones: com plano, o que conta e o plano preenchido para AS
+    # trilhas que estao la, nao o desenho de quando a placa foi salva
+    subprocess.run([KICAD_CLI, "pcb", "drc", "--refill-zones", "--format", "json",
                     "--output", saida, caminho],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     with open(saida, encoding="utf-8") as f:

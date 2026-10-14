@@ -13,6 +13,11 @@ e soldar na bancada** — não em fábrica de PCB.
 - **Respeita o projeto.** Folga da classe de rede, folga cobre–borda do Board Setup e **áreas
   proibidas quaisquer** (trilha, via, footprint), em qualquer formato — inclusive as que vêm
   dentro de um footprint, como a proteção de um furo de fixação.
+- **Plano de GND.** Se a placa tem uma zona de cobre com rede na face de baixo (o plano de GND),
+  o roteador deixa o plano ligar os pads dessa rede e só faz trilha para costurar os pedaços
+  que as outras trilhas separaram. Cada pad precisa de pelo menos dois raios de alívio térmico
+  chegando ao plano para contar como ligado. Plano na face de cima ligado a pad seria solda do
+  lado dos componentes: a janela avisa.
 - **Conector na periferia.** Conectores (J, P, CN, X ou footprint de conector) ficam na parte de
   fora do circuito, sem peça entre eles e a borda — sem serem empurrados contra a borda.
 - **Respeita o seu cadeado.** Peça travada no KiCad não se move. Furo de fixação também não.

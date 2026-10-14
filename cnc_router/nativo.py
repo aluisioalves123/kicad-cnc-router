@@ -12,7 +12,7 @@ import ctypes
 import os
 import sys
 
-ABI_ESPERADA = 8
+ABI_ESPERADA = 9
 
 CIRCULO, CAPSULA, RETANGULO, POLIGONO, FORA_DE, SEGMENTO = 0, 1, 2, 3, 4, 5
 CIMA, BAIXO, AMBAS = 1, 2, 3
@@ -78,6 +78,11 @@ class PbPadC(ctypes.Structure):
                 ("larg", ctypes.c_double), ("alt", ctypes.c_double)]
 
 
+class PbPlano(ctypes.Structure):
+    _fields_ = [("rede", ctypes.c_int), ("face", ctypes.c_int),
+                ("n_pontos", ctypes.c_int), ("pontos", ctypes.POINTER(ctypes.c_double))]
+
+
 class PbProibida(ctypes.Structure):
     _fields_ = [("faces_trilha", ctypes.c_int), ("sem_footprint", ctypes.c_int),
                 ("n_pontos", ctypes.c_int), ("pontos", ctypes.POINTER(ctypes.c_double))]
@@ -134,6 +139,8 @@ def _assina(lib):
                             ctypes.c_double, ctypes.c_double]
     lib.pb_destroi.argtypes = [ctypes.c_void_p]
     lib.pb_pinta.argtypes = [ctypes.c_void_p, P(PbForma), ctypes.c_int]
+    lib.pb_define_planos.restype = ctypes.c_int
+    lib.pb_define_planos.argtypes = [ctypes.c_void_p, P(PbPlano), ctypes.c_int]
     for nome in ("pb_colunas", "pb_linhas"):
         getattr(lib, nome).restype = ctypes.c_int
         getattr(lib, nome).argtypes = [ctypes.c_void_p]
@@ -156,6 +163,7 @@ def _assina(lib):
                                  ctypes.c_double, ctypes.c_double,
                                  P(ctypes.c_double), ctypes.c_int,
                                  P(PbProibida), ctypes.c_int,
+                                 P(PbPlano), ctypes.c_int,
                                  P(PbPeca), ctypes.c_int,
                                  P(PbPadC), ctypes.c_int,
                                  ctypes.c_int, ctypes.c_int, ctypes.c_ulonglong,
@@ -192,6 +200,23 @@ def regras_para_c(regras, custos=None, salto_via=5, orcamento=3000000,
     )
 
 
+def planos_para_c(planos):
+    """Planos que valem para ligar pad: os da face de baixo. Plano de cima so liga
+    por via e nunca em pad (seria solda do lado dos componentes), entao fica de
+    fora da conta - o roteador faz trilha normal para essa rede."""
+    uteis = [z for z in planos if z.camada == "B.Cu" and z.liga_pads]
+    vetor = (PbPlano * max(1, len(uteis)))()
+    vetor._pontos = []
+    for i, z in enumerate(uteis):
+        pts = (ctypes.c_double * (len(z.poligono) * 2))()
+        for k, (x, y) in enumerate(z.poligono):
+            pts[k * 2], pts[k * 2 + 1] = x, y
+        vetor._pontos.append(pts)
+        vetor[i] = PbPlano(rede=z.rede, face=1, n_pontos=len(z.poligono), pontos=pts)
+    vetor._n = len(uteis)
+    return vetor
+
+
 class Mapa:
     """Dono do mapa em C. Fecha sozinho."""
 
@@ -206,6 +231,11 @@ class Mapa:
     def pinta(self, formas):
         vetor = (PbForma * len(formas))(*formas)
         self._lib.pb_pinta(self._p, vetor, len(formas))
+
+    def define_planos(self, planos):
+        vetor = planos_para_c(planos)
+        self.guarda(vetor)
+        return self._lib.pb_define_planos(self._p, vetor, vetor._n)
 
     def guarda(self, buffer):
         self._guardados.append(buffer)

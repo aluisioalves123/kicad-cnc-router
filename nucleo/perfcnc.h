@@ -28,7 +28,7 @@
  * "15 pinos soltos" em toda configuracao. Demorei a desconfiar justamente porque
  * parecia certo. Binario incompativel tem de falhar na cara, nao mentir baixinho.
  */
-#define PB_ABI 8   /* 8: PbPeca.papel - conector vai para a periferia */
+#define PB_ABI 9   /* 9: planos (PbPlano, pb_define_planos, pb_posiciona) */
 /* (o corpo agora e o courtyard - mesma struct, mesma ABI) */
 
 /* ------------------------------------------------------------------ formas */
@@ -78,6 +78,18 @@ typedef struct {
 } PbForma;
 
 typedef struct PbMapa PbMapa;
+
+/* Plano: zona de cobre com rede (o plano de GND). Na fresa e o cobre que sobra
+ * depois da isolacao, ligado a uma rede. O roteador nao faz trilha onde o plano
+ * ja liga: so costura os pedacos que as outras trilhas separaram.
+ * `face` e 0 (cima) ou 1 (baixo); so o plano de BAIXO liga pad - em cima, ligar
+ * no pad seria solda do lado dos componentes. */
+typedef struct {
+    int rede;
+    int face;
+    int n_pontos;
+    const double *pontos;
+} PbPlano;
 
 /* Celula de chegada de um pad: sempre na face de baixo, que e a regra do projeto. */
 typedef struct { int rede; int c, l; } PbAlvo;
@@ -159,6 +171,10 @@ PB_EXPORT void pb_destroi(PbMapa *m);
 
 PB_EXPORT void pb_pinta(PbMapa *m, const PbForma *formas, int quantas);
 
+/* Diz ao mapa onde ha plano. Chamar depois de pintar os obstaculos e antes de
+ * pb_roteia_tudo. Devolve quantos planos ficaram registrados. */
+PB_EXPORT int pb_define_planos(PbMapa *m, const PbPlano *planos, int quantos);
+
 PB_EXPORT int pb_colunas(const PbMapa *m);
 PB_EXPORT int pb_linhas(const PbMapa *m);
 PB_EXPORT int pb_dono(const PbMapa *m, int coluna, int linha, int face);
@@ -194,6 +210,7 @@ PB_EXPORT int pb_posiciona(const PbRegras *regras,
                            double x0, double y0, double largura, double altura,
                            const double *contorno, int n_contorno,
                            const PbProibida *proibidas, int n_proibidas,
+                           const PbPlano *planos, int n_planos,
                            PbPeca *pecas, int n_pecas,
                            const PbPadC *pads, int n_pads,
                            int candidatos, int passos, unsigned long long semente,

@@ -103,5 +103,10 @@ def escreve(board, resultado, regras) -> dict:
         board.Add(v)
         criadas["vias"] += 1
 
+    # O plano e o cobre que sobra: com trilha nova, ele tem de ser preenchido de
+    # novo, senao fica o desenho velho por cima das trilhas novas.
+    zonas = [z for z in board.Zones() if not z.GetIsRuleArea() and z.GetNetCode() > 0]
+    if zonas:
+        pcbnew.ZONE_FILLER(board).Fill(zonas)
     board.BuildConnectivity()
     return criadas
